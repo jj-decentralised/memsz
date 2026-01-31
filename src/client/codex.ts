@@ -171,7 +171,6 @@ export const QUERIES = {
             token1
           }
           liquidity
-          volume24
         }
       }
     }
