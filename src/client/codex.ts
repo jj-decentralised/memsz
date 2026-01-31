@@ -143,20 +143,8 @@ export const QUERIES = {
   `,
 
   FILTER_TOKEN_WALLETS: `
-    query FilterTokenWallets(
-      $tokenAddress: String!
-      $networkId: Int!
-      $limit: Int
-      $offset: Int
-      $rankings: [TokenWalletRankingInput]
-    ) {
-      filterTokenWallets(
-        tokenAddress: $tokenAddress
-        networkId: $networkId
-        limit: $limit
-        offset: $offset
-        rankings: $rankings
-      ) {
+    query FilterTokenWallets($input: FilterTokenWalletsInput!) {
+      filterTokenWallets(input: $input) {
         results {
           walletAddress
           realizedPnlUsd
@@ -165,6 +153,7 @@ export const QUERIES = {
           sellCount
         }
         count
+        offset
       }
     }
   `,

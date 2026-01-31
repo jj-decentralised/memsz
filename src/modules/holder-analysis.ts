@@ -47,22 +47,26 @@ async function fetchTokenWallets(
   const PAGE_SIZE = 200;
   const maxPages = Math.ceil(maxWallets / PAGE_SIZE);
 
+  const tokenId = `${tokenAddress}:${networkId}`;
+
   const results = await paginateAll<TokenWalletResult>(
     async (offset) => {
       const data = await rateLimitedQuery<FilterTokenWalletsResponse>(
         client,
         QUERIES.FILTER_TOKEN_WALLETS,
         {
-          tokenAddress,
-          networkId,
-          limit: PAGE_SIZE,
-          offset,
-          rankings: [
-            {
-              attribute: "realizedPnlUsd",
-              direction: "DESC",
-            },
-          ],
+          input: {
+            tokenIds: [tokenId],
+            networkId,
+            limit: PAGE_SIZE,
+            offset,
+            rankings: [
+              {
+                attribute: "realizedPnlUsd",
+                direction: "DESC",
+              },
+            ],
+          },
         }
       );
       return {
