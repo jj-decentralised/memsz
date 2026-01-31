@@ -160,10 +160,16 @@ export const QUERIES = {
       filterTokenWallets(input: $input) {
         results {
           address
-          realizedProfitUsd1y
-          realizedProfitPercentage1y
+          firstTransactionAt
+          lastTransactionAt
+          tokenBalance
           tokenBalanceLiveUsd
           tokenAcquisitionCostUsd
+          purchasedTokenBalance
+          realizedProfitUsd1y
+          realizedProfitPercentage1y
+          amountBoughtUsd1y
+          amountSoldUsd1y
           buys1y
           sells1y
         }

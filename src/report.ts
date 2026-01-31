@@ -82,19 +82,56 @@ export function generateReport(
           : 0,
       medianDaysAbove10M: median(daysAbove),
     },
-    holderSummary: {
-      totalHoldersAnalyzed: totalHolders,
-      overallProfitPercentage:
-        totalHolders > 0 ? (totalInProfit / totalHolders) * 100 : 0,
-      overallLossPercentage:
-        totalHolders > 0 ? (totalInLoss / totalHolders) * 100 : 0,
-      top10PercentAverageProfit:
-        top10Profits.length > 0
-          ? top10Profits.reduce((s, v) => s + v, 0) / top10Profits.length
-          : 0,
-      top10PercentMedianProfit: median(top10Profits),
-      top10PercentMaxProfit: Math.max(0, ...top10MaxProfits),
-    },
+    holderSummary: (() => {
+      // Compute global aggregate P&L across all tokens
+      const globalRealizedProfit = holderAnalyses.reduce(
+        (s, h) => s + h.aggregatePnl.totalRealizedProfit, 0
+      );
+      const globalRealizedLoss = holderAnalyses.reduce(
+        (s, h) => s + h.aggregatePnl.totalRealizedLoss, 0
+      );
+      const globalUnrealizedProfit = holderAnalyses.reduce(
+        (s, h) => s + h.aggregatePnl.totalUnrealizedProfit, 0
+      );
+      const globalUnrealizedLoss = holderAnalyses.reduce(
+        (s, h) => s + h.aggregatePnl.totalUnrealizedLoss, 0
+      );
+      const globalNetPnl = globalRealizedProfit + globalRealizedLoss +
+        globalUnrealizedProfit + globalUnrealizedLoss;
+      const globalProfitFactor = Math.abs(globalRealizedLoss) > 0
+        ? globalRealizedProfit / Math.abs(globalRealizedLoss)
+        : globalRealizedProfit > 0 ? Infinity : 0;
+
+      // Collect all per-token econometric values to compute global medians/averages
+      const allAvgWins = holderAnalyses.filter((h) => h.econometrics.avgWin > 0).map((h) => h.econometrics.avgWin);
+      const allAvgLosses = holderAnalyses.filter((h) => h.econometrics.avgLoss < 0).map((h) => h.econometrics.avgLoss);
+      const allMedianPnls = holderAnalyses.map((h) => h.econometrics.medianPnl);
+
+      return {
+        totalHoldersAnalyzed: totalHolders,
+        overallProfitPercentage:
+          totalHolders > 0 ? (totalInProfit / totalHolders) * 100 : 0,
+        overallLossPercentage:
+          totalHolders > 0 ? (totalInLoss / totalHolders) * 100 : 0,
+        top10PercentAverageProfit:
+          top10Profits.length > 0
+            ? top10Profits.reduce((s, v) => s + v, 0) / top10Profits.length
+            : 0,
+        top10PercentMedianProfit: median(top10Profits),
+        top10PercentMaxProfit: Math.max(0, ...top10MaxProfits),
+        globalRealizedProfit,
+        globalRealizedLoss,
+        globalUnrealizedProfit,
+        globalUnrealizedLoss,
+        globalNetPnl,
+        globalProfitFactor,
+        globalMedianPnl: median(allMedianPnls),
+        globalAvgWin: allAvgWins.length > 0
+          ? allAvgWins.reduce((s, v) => s + v, 0) / allAvgWins.length : 0,
+        globalAvgLoss: allAvgLosses.length > 0
+          ? allAvgLosses.reduce((s, v) => s + v, 0) / allAvgLosses.length : 0,
+      };
+    })(),
     survivalRates: {
       days30: {
         total: s30.length,

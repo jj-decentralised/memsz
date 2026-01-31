@@ -3,11 +3,15 @@
  *
  * For each token that hit $10M market cap, analyzes wallet-level PnL:
  * - How many holders are in profit vs loss
- * - What the top 10% earners made
- * - PnL distribution across all holders
+ * - Realized and unrealized P&L breakdown
+ * - Top/bottom wallet performance
+ * - Econometric distribution stats
+ *
+ * IMPORTANT: The Codex API returns most numeric fields as String!
+ * All values must be parseFloat'd before any arithmetic.
  *
  * Uses filterTokenWallets to get wallet PnL data for each token.
- * Pulls up to 5000 wallets per token for complete coverage.
+ * Pulls ALL wallets (no cap) for complete coverage.
  */
 
 import type { GraphQLClient } from "graphql-request";
@@ -21,10 +25,16 @@ import { paginateAll, median } from "../utils/helpers.js";
 
 interface TokenWalletResult {
   address: string;
-  realizedProfitUsd1y: number | null;
-  realizedProfitPercentage1y: number | null;
-  tokenBalanceLiveUsd: number | null;
-  tokenAcquisitionCostUsd: number | null;
+  firstTransactionAt: number | null;
+  lastTransactionAt: number | null;
+  tokenBalance: string | null;
+  tokenBalanceLiveUsd: string | null;
+  tokenAcquisitionCostUsd: string | null;
+  purchasedTokenBalance: string | null;
+  realizedProfitUsd1y: string | null;
+  realizedProfitPercentage1y: string | null;
+  amountBoughtUsd1y: string | null;
+  amountSoldUsd1y: string | null;
   buys1y: number | null;
   sells1y: number | null;
 }
@@ -36,18 +46,25 @@ interface FilterTokenWalletsResponse {
   };
 }
 
+/** Safely parse a string or number from the API into a float. */
+function num(v: string | number | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return isNaN(n) ? 0 : n;
+}
+
 /**
  * Fetch wallet PnL data for a specific token.
- * Pulls up to maxWallets (default 5000) for thorough coverage.
+ * Pulls ALL wallets — no artificial cap.
  */
 async function fetchTokenWallets(
   client: GraphQLClient,
   tokenAddress: string,
   networkId: number,
-  maxWallets = 5000
 ): Promise<HolderPnL[]> {
   const PAGE_SIZE = 200;
-  const maxPages = Math.ceil(maxWallets / PAGE_SIZE);
+  // Allow up to 500 pages (100K wallets) — effectively unlimited
+  const maxPages = 500;
 
   const tokenId = `${tokenAddress}:${networkId}`;
 
@@ -81,16 +98,25 @@ async function fetchTokenWallets(
   );
 
   return results.map((r) => {
-    const realized = r.realizedProfitUsd1y ?? 0;
-    // Unrealized = current value of holdings - acquisition cost
-    const unrealized = (r.tokenBalanceLiveUsd ?? 0) - (r.tokenAcquisitionCostUsd ?? 0);
+    // All monetary values from Codex are String! — must parseFloat
+    const realized = num(r.realizedProfitUsd1y);
+    const holdingValue = num(r.tokenBalanceLiveUsd);
+    const costBasis = num(r.tokenAcquisitionCostUsd);
+    const unrealized = holdingValue - costBasis;
     const total = realized + unrealized;
+    const amountBought = num(r.amountBoughtUsd1y);
+    const amountSold = num(r.amountSoldUsd1y);
+
     return {
       walletAddress: r.address,
       tokenAddress,
       realizedPnlUsd: realized,
       unrealizedPnlUsd: unrealized,
       totalPnlUsd: total,
+      costBasisUsd: costBasis,
+      holdingValueUsd: holdingValue,
+      amountBoughtUsd: amountBought,
+      amountSoldUsd: amountSold,
       buyCount: r.buys1y ?? 0,
       sellCount: r.sells1y ?? 0,
       inProfit: total > 0,
@@ -109,28 +135,65 @@ export async function analyzeTokenHolders(
 ): Promise<TokenHolderAnalysis> {
   const wallets = await fetchTokenWallets(client, tokenAddress, networkId);
 
-  const totalAnalyzed = wallets.length;
-  const inProfit = wallets.filter((w) => w.totalPnlUsd > 0).length;
-  const inLoss = wallets.filter((w) => w.totalPnlUsd < 0).length;
-  const breakeven = wallets.filter((w) => w.totalPnlUsd === 0).length;
+  // Filter out wallets with zero activity (no buys, no sells, no cost basis, no realized PnL)
+  // These are typically airdrop/transfer recipients with no meaningful PnL data
+  const activeWallets = wallets.filter(
+    (w) => w.buyCount > 0 || w.sellCount > 0 || w.costBasisUsd > 0 || Math.abs(w.realizedPnlUsd) > 0.01
+  );
 
-  // Top 10% analysis
-  const sortedByProfit = [...wallets].sort(
+  const totalAnalyzed = activeWallets.length;
+  const inProfit = activeWallets.filter((w) => w.totalPnlUsd > 0.01).length;
+  const inLoss = activeWallets.filter((w) => w.totalPnlUsd < -0.01).length;
+  const breakeven = totalAnalyzed - inProfit - inLoss;
+
+  // Sort by total P&L descending
+  const sortedByProfit = [...activeWallets].sort(
     (a, b) => b.totalPnlUsd - a.totalPnlUsd
   );
+
+  // Top 10% analysis
   const top10Count = Math.max(1, Math.ceil(totalAnalyzed * 0.1));
   const top10Wallets = sortedByProfit.slice(0, top10Count);
   const top10Profits = top10Wallets.map((w) => w.totalPnlUsd);
 
-  const pnlValues = wallets.map((w) => w.totalPnlUsd);
-
   // Top 20 most profitable and bottom 20 biggest losers for profile pages
-  const topProfitWallets = sortedByProfit.slice(0, 20);
-  const topLossWallets = sortedByProfit.slice(-20).reverse();
+  const topProfitWallets = sortedByProfit.filter((w) => w.totalPnlUsd > 0).slice(0, 20);
+  const topLossWallets = sortedByProfit.filter((w) => w.totalPnlUsd < 0).slice(-20).reverse();
+
+  // Aggregate realized/unrealized across all wallets
+  const totalRealizedProfit = activeWallets.reduce(
+    (s, w) => s + (w.realizedPnlUsd > 0 ? w.realizedPnlUsd : 0), 0
+  );
+  const totalRealizedLoss = activeWallets.reduce(
+    (s, w) => s + (w.realizedPnlUsd < 0 ? w.realizedPnlUsd : 0), 0
+  );
+  const totalUnrealizedProfit = activeWallets.reduce(
+    (s, w) => s + (w.unrealizedPnlUsd > 0 ? w.unrealizedPnlUsd : 0), 0
+  );
+  const totalUnrealizedLoss = activeWallets.reduce(
+    (s, w) => s + (w.unrealizedPnlUsd < 0 ? w.unrealizedPnlUsd : 0), 0
+  );
+  const totalVolumeBought = activeWallets.reduce((s, w) => s + w.amountBoughtUsd, 0);
+  const totalVolumeSold = activeWallets.reduce((s, w) => s + w.amountSoldUsd, 0);
+
+  // Percentile P&L values
+  const allPnl = sortedByProfit.map((w) => w.totalPnlUsd);
+  const p = (pct: number) => {
+    if (allPnl.length === 0) return 0;
+    const idx = Math.max(0, Math.ceil(allPnl.length * (1 - pct / 100)) - 1);
+    return allPnl[idx];
+  };
+
+  // Average win vs average loss
+  const wins = activeWallets.filter((w) => w.totalPnlUsd > 0.01);
+  const losses = activeWallets.filter((w) => w.totalPnlUsd < -0.01);
+  const avgWin = wins.length > 0 ? wins.reduce((s, w) => s + w.totalPnlUsd, 0) / wins.length : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((s, w) => s + w.totalPnlUsd, 0) / losses.length : 0;
 
   return {
     tokenAddress,
     symbol,
+    totalWalletsFetched: wallets.length,
     totalHoldersAnalyzed: totalAnalyzed,
     holdersInProfit: inProfit,
     holdersInLoss: inLoss,
@@ -148,7 +211,31 @@ export async function analyzeTokenHolders(
       maxProfit: top10Profits[0] ?? 0,
       minProfitInTopDecile: top10Profits[top10Profits.length - 1] ?? 0,
     },
-    pnlDistribution: computePnlDistribution(pnlValues),
+    aggregatePnl: {
+      totalRealizedProfit,
+      totalRealizedLoss,
+      netRealized: totalRealizedProfit + totalRealizedLoss,
+      totalUnrealizedProfit,
+      totalUnrealizedLoss,
+      netUnrealized: totalUnrealizedProfit + totalUnrealizedLoss,
+      netTotal: totalRealizedProfit + totalRealizedLoss + totalUnrealizedProfit + totalUnrealizedLoss,
+      totalVolumeBought,
+      totalVolumeSold,
+    },
+    econometrics: {
+      avgWin,
+      avgLoss,
+      profitFactor: Math.abs(totalRealizedLoss) > 0
+        ? totalRealizedProfit / Math.abs(totalRealizedLoss)
+        : totalRealizedProfit > 0 ? Infinity : 0,
+      winRate: totalAnalyzed > 0 ? (inProfit / totalAnalyzed) * 100 : 0,
+      medianPnl: median(allPnl),
+      percentile25: p(25),
+      percentile75: p(75),
+      percentile90: p(90),
+      percentile99: p(99),
+    },
+    pnlDistribution: computePnlDistribution(allPnl),
     topProfitWallets,
     topLossWallets,
   };
@@ -167,9 +254,9 @@ function computePnlDistribution(
 
   for (const pnl of pnlValues) {
     if (pnl < -1000) dist.bigLoss++;
-    else if (pnl < -10) dist.moderateLoss++;
-    else if (pnl <= 10) dist.breakeven++;
-    else if (pnl <= 1000) dist.moderateGain++;
+    else if (pnl < -100) dist.moderateLoss++;
+    else if (pnl <= 100) dist.breakeven++;
+    else if (pnl <= 10000) dist.moderateGain++;
     else dist.bigGain++;
   }
 
@@ -199,9 +286,12 @@ export async function analyzeAllTokenHolders(
         token.networkId
       );
       results.push(analysis);
+      const agg = analysis.aggregatePnl;
       console.log(
-        `  [holders] ${token.symbol}: ${analysis.holdersInProfit}/${analysis.totalHoldersAnalyzed} in profit ` +
-          `(${analysis.profitPercentage.toFixed(1)}%), top10% avg=${formatUsd(analysis.top10PercentStats.averageProfit)}`
+        `  [holders] ${token.symbol}: ${analysis.totalHoldersAnalyzed} active wallets ` +
+          `(${analysis.profitPercentage.toFixed(1)}% profit) | ` +
+          `realized: ${fmtUsd(agg.netRealized)} | unrealized: ${fmtUsd(agg.netUnrealized)} | ` +
+          `top earner: ${fmtUsd(analysis.top10PercentStats.maxProfit)}`
       );
       onProgress?.(analysis, i, tokens.length);
     } catch (err) {
@@ -212,8 +302,10 @@ export async function analyzeAllTokenHolders(
   return results;
 }
 
-function formatUsd(v: number): string {
-  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
-  if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-  return `$${v.toFixed(0)}`;
+function fmtUsd(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "+";
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
 }

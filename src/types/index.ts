@@ -55,6 +55,14 @@ export interface HolderPnL {
   unrealizedPnlUsd: number;
   /** Total (realized + unrealized) */
   totalPnlUsd: number;
+  /** Total USD cost to acquire tokens */
+  costBasisUsd: number;
+  /** Current USD value of holdings */
+  holdingValueUsd: number;
+  /** Total USD bought in last year */
+  amountBoughtUsd: number;
+  /** Total USD sold in last year */
+  amountSoldUsd: number;
   /** Number of buy transactions */
   buyCount: number;
   /** Number of sell transactions */
@@ -66,6 +74,9 @@ export interface HolderPnL {
 export interface TokenHolderAnalysis {
   tokenAddress: string;
   symbol: string;
+  /** Total wallets returned by API (including inactive) */
+  totalWalletsFetched: number;
+  /** Active wallets with trades or cost basis */
   totalHoldersAnalyzed: number;
   holdersInProfit: number;
   holdersInLoss: number;
@@ -80,13 +91,37 @@ export interface TokenHolderAnalysis {
     maxProfit: number;
     minProfitInTopDecile: number;
   };
+  /** Aggregate realized/unrealized P&L across all wallets */
+  aggregatePnl: {
+    totalRealizedProfit: number;
+    totalRealizedLoss: number;
+    netRealized: number;
+    totalUnrealizedProfit: number;
+    totalUnrealizedLoss: number;
+    netUnrealized: number;
+    netTotal: number;
+    totalVolumeBought: number;
+    totalVolumeSold: number;
+  };
+  /** Econometric distribution stats */
+  econometrics: {
+    avgWin: number;
+    avgLoss: number;
+    profitFactor: number;
+    winRate: number;
+    medianPnl: number;
+    percentile25: number;
+    percentile75: number;
+    percentile90: number;
+    percentile99: number;
+  };
   /** Distribution of P&L across all holders */
   pnlDistribution: {
-    bigLoss: number;      // < -50%
-    moderateLoss: number;  // -50% to -10%
-    breakeven: number;     // -10% to +10%
-    moderateGain: number;  // +10% to +100%
-    bigGain: number;       // > +100%
+    bigLoss: number;      // < -$1,000
+    moderateLoss: number;  // -$1,000 to -$100
+    breakeven: number;     // -$100 to +$100
+    moderateGain: number;  // +$100 to +$10,000
+    bigGain: number;       // > +$10,000
   };
   /** Top performing wallets (most profit) */
   topProfitWallets: HolderPnL[];
@@ -133,6 +168,16 @@ export interface AggregateReport {
     top10PercentAverageProfit: number;
     top10PercentMedianProfit: number;
     top10PercentMaxProfit: number;
+    /** Aggregate P&L across ALL tokens */
+    globalRealizedProfit: number;
+    globalRealizedLoss: number;
+    globalUnrealizedProfit: number;
+    globalUnrealizedLoss: number;
+    globalNetPnl: number;
+    globalProfitFactor: number;
+    globalMedianPnl: number;
+    globalAvgWin: number;
+    globalAvgLoss: number;
   };
   survivalRates: {
     days30: { total: number; alive: number; rate: number };

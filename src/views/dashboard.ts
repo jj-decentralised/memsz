@@ -542,6 +542,49 @@ export function renderDashboard(
               <div class="desc">Total Wallets Analyzed</div>
             </div>
           </div>
+
+          <!-- Global Aggregate P&L -->
+          <div style="margin-top:20px">
+            <div style="font-family:var(--font-serif);font-size:16px;font-weight:700;margin-bottom:12px">Aggregate P&L Across All Tokens</div>
+            <div class="stat-grid">
+              <div class="stat-box">
+                <div class="val green">${fmtUsd(h?.globalRealizedProfit)}</div>
+                <div class="desc">Total Realized Profit</div>
+              </div>
+              <div class="stat-box">
+                <div class="val red">${fmtUsd(h?.globalRealizedLoss)}</div>
+                <div class="desc">Total Realized Loss</div>
+              </div>
+              <div class="stat-box">
+                <div class="val ${Number(h?.globalNetPnl) >= 0 ? "green" : "red"}">${fmtUsd(h?.globalNetPnl)}</div>
+                <div class="desc">Net P&L (All Wallets)</div>
+              </div>
+              <div class="stat-box">
+                <div class="val green">${fmtUsd(h?.globalUnrealizedProfit)}</div>
+                <div class="desc">Unrealized Profit</div>
+              </div>
+              <div class="stat-box">
+                <div class="val red">${fmtUsd(h?.globalUnrealizedLoss)}</div>
+                <div class="desc">Unrealized Loss</div>
+              </div>
+              <div class="stat-box">
+                <div class="val amber">${(() => { const pf = Number(h?.globalProfitFactor); return (isNaN(pf) || !isFinite(pf)) ? "—" : pf.toFixed(2) + "x"; })()}</div>
+                <div class="desc">Profit Factor</div>
+              </div>
+              <div class="stat-box">
+                <div class="val">${fmtUsd(h?.globalAvgWin)}</div>
+                <div class="desc">Avg Win (per token)</div>
+              </div>
+              <div class="stat-box">
+                <div class="val red">${fmtUsd(h?.globalAvgLoss)}</div>
+                <div class="desc">Avg Loss (per token)</div>
+              </div>
+              <div class="stat-box">
+                <div class="val">${fmtUsd(h?.globalMedianPnl)}</div>
+                <div class="desc">Median P&L (per token)</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

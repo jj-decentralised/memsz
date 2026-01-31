@@ -60,6 +60,9 @@ function walletRow(w: HolderPnL, i: number): string {
       <td class="num ${cls}">${fmtUsd(w.totalPnlUsd)}</td>
       <td class="num">${fmtUsd(w.realizedPnlUsd)}</td>
       <td class="num">${fmtUsd(w.unrealizedPnlUsd)}</td>
+      <td class="num">${fmtUsd(w.costBasisUsd)}</td>
+      <td class="num">${fmtUsd(w.amountBoughtUsd)}</td>
+      <td class="num">${fmtUsd(w.amountSoldUsd)}</td>
       <td class="num">${fmtNum(w.buyCount)}</td>
       <td class="num">${fmtNum(w.sellCount)}</td>
     </tr>
@@ -251,6 +254,85 @@ export function renderTokenProfile(data: TokenProfileData): string {
         <span><span style="display:inline-block;width:10px;height:10px;background:#5ab87a;border-radius:2px"></span> Moderate Gain</span>
         <span><span style="display:inline-block;width:10px;height:10px;background:#14713a;border-radius:2px"></span> Big Gain</span>
       </div>
+
+      <!-- Aggregate P&L Stats -->
+      <div class="section-header" style="font-size:16px; margin-top:24px">Aggregate P&L</div>
+      <div class="section-deck">Realized and unrealized profit/loss summed across all ${fmtNum(h.totalHoldersAnalyzed)} active wallets.</div>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="val green">${fmtUsd(h.aggregatePnl.totalRealizedProfit)}</div>
+          <div class="desc">Total Realized Profit</div>
+        </div>
+        <div class="stat-box">
+          <div class="val red">${fmtUsd(h.aggregatePnl.totalRealizedLoss)}</div>
+          <div class="desc">Total Realized Loss</div>
+        </div>
+        <div class="stat-box">
+          <div class="val ${h.aggregatePnl.netRealized >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netRealized)}</div>
+          <div class="desc">Net Realized</div>
+        </div>
+        <div class="stat-box">
+          <div class="val green">${fmtUsd(h.aggregatePnl.totalUnrealizedProfit)}</div>
+          <div class="desc">Unrealized Profit</div>
+        </div>
+        <div class="stat-box">
+          <div class="val red">${fmtUsd(h.aggregatePnl.totalUnrealizedLoss)}</div>
+          <div class="desc">Unrealized Loss</div>
+        </div>
+        <div class="stat-box">
+          <div class="val ${h.aggregatePnl.netTotal >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netTotal)}</div>
+          <div class="desc">Net Total P&L</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.aggregatePnl.totalVolumeBought)}</div>
+          <div class="desc">Total Volume Bought</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.aggregatePnl.totalVolumeSold)}</div>
+          <div class="desc">Total Volume Sold</div>
+        </div>
+      </div>
+
+      <!-- Econometric Stats -->
+      <div class="section-header" style="font-size:16px; margin-top:24px">Econometric Analysis</div>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="val green">${fmtUsd(h.econometrics.avgWin)}</div>
+          <div class="desc">Average Win</div>
+        </div>
+        <div class="stat-box">
+          <div class="val red">${fmtUsd(h.econometrics.avgLoss)}</div>
+          <div class="desc">Average Loss</div>
+        </div>
+        <div class="stat-box">
+          <div class="val amber">${(() => { const pf = h.econometrics.profitFactor; return isFinite(pf) ? pf.toFixed(2) + "x" : "∞"; })()}</div>
+          <div class="desc">Profit Factor</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtPct(h.econometrics.winRate)}</div>
+          <div class="desc">Win Rate</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.econometrics.medianPnl)}</div>
+          <div class="desc">Median P&L</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.econometrics.percentile25)}</div>
+          <div class="desc">25th Percentile</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.econometrics.percentile75)}</div>
+          <div class="desc">75th Percentile</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.econometrics.percentile90)}</div>
+          <div class="desc">90th Percentile</div>
+        </div>
+        <div class="stat-box">
+          <div class="val">${fmtUsd(h.econometrics.percentile99)}</div>
+          <div class="desc">99th Percentile</div>
+        </div>
+      </div>
     </div>
 
     <!-- WALLET TABLES -->
@@ -268,6 +350,9 @@ export function renderTokenProfile(data: TokenProfileData): string {
                 <th class="num">Total P&L</th>
                 <th class="num">Realized</th>
                 <th class="num">Unrealized</th>
+                <th class="num">Cost Basis</th>
+                <th class="num">Bought</th>
+                <th class="num">Sold</th>
                 <th class="num">Buys</th>
                 <th class="num">Sells</th>
               </tr>
@@ -290,6 +375,9 @@ export function renderTokenProfile(data: TokenProfileData): string {
                 <th class="num">Total P&L</th>
                 <th class="num">Realized</th>
                 <th class="num">Unrealized</th>
+                <th class="num">Cost Basis</th>
+                <th class="num">Bought</th>
+                <th class="num">Sold</th>
                 <th class="num">Buys</th>
                 <th class="num">Sells</th>
               </tr>
