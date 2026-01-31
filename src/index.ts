@@ -171,11 +171,15 @@ async function runAnalysis() {
   if (holderAnalyses) {
     const totalWallets = holderAnalyses.reduce((s: number, h: any) => s + (h.totalHoldersAnalyzed ?? 0), 0);
     const hasWalletData = holderAnalyses.some((h: any) => Array.isArray(h.topProfitWallets) && h.topProfitWallets.length > 0);
+    const hasAggregatePnl = holderAnalyses.some((h: any) => h.aggregatePnl != null);
     if (totalWallets === 0) {
       console.log("  [cache] Holder cache has 0 wallets — discarding stale data");
       holderAnalyses = null;
     } else if (!hasWalletData) {
       console.log("  [cache] Holder cache missing wallet-level data — discarding to re-fetch");
+      holderAnalyses = null;
+    } else if (!hasAggregatePnl) {
+      console.log("  [cache] Holder cache missing aggregatePnl — discarding to re-fetch with corrected math");
       holderAnalyses = null;
     }
   }
