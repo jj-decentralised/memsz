@@ -23,6 +23,7 @@ import { generateReport } from "./report.js";
 import type { CodexConfig, TokenInfo, AggregateReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
 import { saveJson, loadJson, runFile, getFilePath } from "./utils/store.js";
+import { renderDashboard } from "./views/dashboard.js";
 
 // ─── Global state for health check ──────────────────────────────────────
 
@@ -258,7 +259,21 @@ function startHealthServer() {
   const port = parseInt(process.env.PORT ?? "3000", 10);
 
   const server = createServer((req, res) => {
-    if (req.url === "/health" || req.url === "/") {
+    if (req.url === "/") {
+      const report = status.report || loadJson<AggregateReport>("latest-report.json");
+      const html = renderDashboard(report, {
+        state: status.state,
+        phase: status.phase,
+        progress: status.progress,
+        lastRun: status.lastRun,
+        lastError: status.lastError,
+      });
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(html);
+      return;
+    }
+
+    if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
