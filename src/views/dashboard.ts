@@ -42,8 +42,8 @@ export function renderDashboard(
 
   // Top tokens by peak market cap
   const topTokens = report?.tokenDetails
-    ?.filter((t) => t.trajectory.reachedThreshold)
-    .sort((a, b) => b.trajectory.peakMarketCap - a.trajectory.peakMarketCap)
+    ?.filter((t) => t.trajectory?.reachedThreshold)
+    .sort((a, b) => (b.trajectory?.peakMarketCap ?? 0) - (a.trajectory?.peakMarketCap ?? 0))
     .slice(0, 25) ?? [];
 
   // Survival funnel data
@@ -567,17 +567,17 @@ export function renderDashboard(
             const top10 = t.holders
               ? fmtUsd(t.holders.top10PercentStats.averageProfit)
               : "—";
-            const alive = t.survival.currentlyAlive;
+            const alive = t.survival?.currentlyAlive ?? false;
             return `
               <tr>
                 <td style="color:var(--ink-tertiary)">${i + 1}</td>
                 <td class="symbol">${t.symbol}</td>
-                <td class="num">${fmtUsd(t.trajectory.peakMarketCap)}</td>
-                <td class="num">${fmtUsd(t.trajectory.currentMarketCap)}</td>
-                <td class="num">${t.trajectory.daysAboveThreshold}</td>
+                <td class="num">${fmtUsd(t.trajectory?.peakMarketCap ?? 0)}</td>
+                <td class="num">${fmtUsd(t.trajectory?.currentMarketCap ?? 0)}</td>
+                <td class="num">${t.trajectory?.daysAboveThreshold ?? 0}</td>
                 <td class="num">${prof}</td>
                 <td class="num">${top10}</td>
-                <td class="num">${fmtUsd(t.survival.currentLiquidity)}</td>
+                <td class="num">${t.survival ? fmtUsd(t.survival.currentLiquidity) : "—"}</td>
                 <td><span class="tag ${alive ? "alive" : "dead"}">${alive ? "Active" : "Dead"}</span></td>
               </tr>
             `;
