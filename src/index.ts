@@ -9,8 +9,9 @@
 
 import "dotenv/config";
 import { createServer } from "http";
-import { createReadStream, existsSync, readFileSync } from "fs";
+import { createReadStream, existsSync, readFileSync, mkdirSync, writeFileSync } from "fs";
 import { stat } from "fs/promises";
+import { join } from "path";
 import { createCodexClient } from "./client/codex.js";
 import {
   discoverCurrentTokensAboveThreshold,
@@ -166,10 +167,15 @@ async function runAnalysis() {
   let holderAnalyses = loadJson<any[]>(runFile("holders"));
 
   // Validate cache: if all entries have 0 wallets analyzed, the previous run failed
+  // Also invalidate if wallet-level data is missing (old format before topProfitWallets)
   if (holderAnalyses) {
     const totalWallets = holderAnalyses.reduce((s: number, h: any) => s + (h.totalHoldersAnalyzed ?? 0), 0);
+    const hasWalletData = holderAnalyses.some((h: any) => Array.isArray(h.topProfitWallets) && h.topProfitWallets.length > 0);
     if (totalWallets === 0) {
       console.log("  [cache] Holder cache has 0 wallets — discarding stale data");
+      holderAnalyses = null;
+    } else if (!hasWalletData) {
+      console.log("  [cache] Holder cache missing wallet-level data — discarding to re-fetch");
       holderAnalyses = null;
     }
   }
@@ -274,6 +280,15 @@ async function runAnalysis() {
   const dashboardReport = generateDashboardReport(report);
   saveJson("latest-dashboard.json", dashboardReport);
 
+  // Save individual token profile files so /token/:address doesn't load the full 11MB report
+  const tokenDir = getFilePath("tokens");
+  mkdirSync(tokenDir, { recursive: true });
+  for (const td of report.tokenDetails) {
+    const profilePath = join(tokenDir, `${td.address}.json`);
+    writeFileSync(profilePath, JSON.stringify(td));
+  }
+  console.log(`  [store] Saved ${report.tokenDetails.length} individual token profiles`);
+
   status.state = "completed";
   status.phase = "done";
   status.lastRun = new Date().toISOString();
@@ -320,31 +335,23 @@ function startHealthServer() {
           return;
         }
 
-        // Load full report for this token (needs dailyMarketCaps for chart)
-        // Stream-parse just the token we need to avoid loading entire 11MB
-        const reportPath = getFilePath("latest-report.json");
-        if (existsSync(reportPath)) {
-          const raw = readFileSync(reportPath, "utf-8");
-          const fullReport = JSON.parse(raw) as AggregateReport;
-          const token = fullReport.tokenDetails.find((t) => t.address === address);
-
-          if (token) {
-            const html = renderTokenProfile({
-              address: token.address,
-              symbol: token.symbol,
-              trajectory: token.trajectory,
-              holders: token.holders,
-              survival: token.survival,
-            });
-            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-            res.end(html);
-          } else {
-            res.writeHead(404, { "Content-Type": "text/html" });
-            res.end(`<h1>Token not found</h1><p>Address: ${address}</p><p><a href="/">Back to dashboard</a></p>`);
-          }
+        // Load individual token profile file (~30KB) instead of full report (~11MB)
+        const tokenProfilePath = join(getFilePath("tokens"), `${address}.json`);
+        if (existsSync(tokenProfilePath)) {
+          const raw = readFileSync(tokenProfilePath, "utf-8");
+          const token = JSON.parse(raw) as AggregateReport["tokenDetails"][number];
+          const html = renderTokenProfile({
+            address: token.address,
+            symbol: token.symbol,
+            trajectory: token.trajectory,
+            holders: token.holders,
+            survival: token.survival,
+          });
+          res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+          res.end(html);
         } else {
           res.writeHead(404, { "Content-Type": "text/html" });
-          res.end("<h1>No report data yet</h1><p><a href='/'>Back to dashboard</a></p>");
+          res.end(`<h1>Token not found</h1><p>Address: ${address}</p><p><a href="/">Back to dashboard</a></p>`);
         }
         return;
       }
