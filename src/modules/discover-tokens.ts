@@ -39,7 +39,6 @@ interface FilterTokensResponse {
   filterTokens: {
     results: FilterTokenResult[];
     count: number;
-    offset: number;
   };
 }
 
