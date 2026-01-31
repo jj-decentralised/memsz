@@ -485,9 +485,9 @@ export function renderDashboard(
         <div class="sub">${fmtNum(h?.totalHoldersAnalyzed)} wallets analyzed</div>
       </div>
       <div class="headline-stat">
-        <div class="number">${s?.medianDaysAbove10M?.toFixed(0) ?? "—"}</div>
+        <div class="number">${s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M).toFixed(0) : "—"}</div>
         <div class="label">Median Days Above $10M</div>
-        <div class="sub">avg ${s?.averageDaysAbove10M?.toFixed(1) ?? "—"} days</div>
+        <div class="sub">avg ${s?.averageDaysAbove10M != null ? Number(s.averageDaysAbove10M).toFixed(1) : "—"} days</div>
       </div>
     </div>
 
@@ -568,7 +568,7 @@ export function renderDashboard(
                 <div class="desc">Unrealized Loss</div>
               </div>
               <div class="stat-box">
-                <div class="val amber">${(() => { const pf = Number(h?.globalProfitFactor); return (isNaN(pf) || !isFinite(pf)) ? "—" : pf.toFixed(2) + "x"; })()}</div>
+                <div class="val amber">${(() => { const pf = Number(h?.globalProfitFactor); return (isNaN(pf) || !isFinite(pf) || pf >= 999999) ? "∞" : pf.toFixed(2) + "x"; })()}</div>
                 <div class="desc">Profit Factor</div>
               </div>
               <div class="stat-box">

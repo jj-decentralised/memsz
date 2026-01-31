@@ -101,7 +101,7 @@ export function generateReport(
         globalUnrealizedProfit + globalUnrealizedLoss;
       const globalProfitFactor = Math.abs(globalRealizedLoss) > 0
         ? globalRealizedProfit / Math.abs(globalRealizedLoss)
-        : globalRealizedProfit > 0 ? Infinity : 0;
+        : globalRealizedProfit > 0 ? 999999 : 0;
 
       // Collect all per-token econometric values to compute global medians/averages
       const withEcon = holderAnalyses.filter((h) => h.econometrics != null);

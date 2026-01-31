@@ -308,7 +308,7 @@ export function renderTokenProfile(data: TokenProfileData): string {
           <div class="desc">Average Loss</div>
         </div>
         <div class="stat-box">
-          <div class="val amber">${(() => { const pf = h.econometrics.profitFactor; return isFinite(pf) ? pf.toFixed(2) + "x" : "∞"; })()}</div>
+          <div class="val amber">${(() => { const pf = h.econometrics.profitFactor; return (isFinite(pf) && pf < 999999) ? pf.toFixed(2) + "x" : "∞"; })()}</div>
           <div class="desc">Profit Factor</div>
         </div>
         <div class="stat-box">

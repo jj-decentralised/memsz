@@ -227,7 +227,7 @@ export async function analyzeTokenHolders(
       avgLoss,
       profitFactor: Math.abs(totalRealizedLoss) > 0
         ? totalRealizedProfit / Math.abs(totalRealizedLoss)
-        : totalRealizedProfit > 0 ? Infinity : 0,
+        : totalRealizedProfit > 0 ? 999999 : 0,
       winRate: totalAnalyzed > 0 ? (inProfit / totalAnalyzed) * 100 : 0,
       medianPnl: median(allPnl),
       percentile25: p(25),
