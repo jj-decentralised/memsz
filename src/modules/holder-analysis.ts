@@ -20,11 +20,13 @@ import { QUERIES, rateLimitedQuery } from "../client/codex.js";
 import { paginateAll, median } from "../utils/helpers.js";
 
 interface TokenWalletResult {
-  walletAddress: string;
-  realizedPnlUsd: number;
-  unrealizedPnlUsd: number;
-  buyCount: number;
-  sellCount: number;
+  address: string;
+  realizedProfitUsd1y: number | null;
+  realizedProfitPercentage1y: number | null;
+  tokenBalanceLiveUsd: number | null;
+  tokenAcquisitionCostUsd: number | null;
+  buys1y: number | null;
+  sells1y: number | null;
 }
 
 interface FilterTokenWalletsResponse {
@@ -62,7 +64,7 @@ async function fetchTokenWallets(
             offset,
             rankings: [
               {
-                attribute: "realizedPnlUsd",
+                attribute: "realizedProfitUsd1y",
                 direction: "DESC",
               },
             ],
@@ -78,16 +80,22 @@ async function fetchTokenWallets(
     maxPages
   );
 
-  return results.map((r) => ({
-    walletAddress: r.walletAddress,
-    tokenAddress,
-    realizedPnlUsd: r.realizedPnlUsd ?? 0,
-    unrealizedPnlUsd: r.unrealizedPnlUsd ?? 0,
-    totalPnlUsd: (r.realizedPnlUsd ?? 0) + (r.unrealizedPnlUsd ?? 0),
-    buyCount: r.buyCount ?? 0,
-    sellCount: r.sellCount ?? 0,
-    inProfit: (r.realizedPnlUsd ?? 0) + (r.unrealizedPnlUsd ?? 0) > 0,
-  }));
+  return results.map((r) => {
+    const realized = r.realizedProfitUsd1y ?? 0;
+    // Unrealized = current value of holdings - acquisition cost
+    const unrealized = (r.tokenBalanceLiveUsd ?? 0) - (r.tokenAcquisitionCostUsd ?? 0);
+    const total = realized + unrealized;
+    return {
+      walletAddress: r.address,
+      tokenAddress,
+      realizedPnlUsd: realized,
+      unrealizedPnlUsd: unrealized,
+      totalPnlUsd: total,
+      buyCount: r.buys1y ?? 0,
+      sellCount: r.sells1y ?? 0,
+      inProfit: total > 0,
+    };
+  });
 }
 
 /**

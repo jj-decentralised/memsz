@@ -146,11 +146,13 @@ export const QUERIES = {
     query FilterTokenWallets($input: FilterTokenWalletsInput!) {
       filterTokenWallets(input: $input) {
         results {
-          walletAddress
-          realizedPnlUsd
-          unrealizedPnlUsd
-          buyCount
-          sellCount
+          address
+          realizedProfitUsd1y
+          realizedProfitPercentage1y
+          tokenBalanceLiveUsd
+          tokenAcquisitionCostUsd
+          buys1y
+          sells1y
         }
         count
         offset
