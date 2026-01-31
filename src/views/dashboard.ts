@@ -1,17 +1,20 @@
 import type { AggregateReport, DashboardReport } from "../types/index.js";
 
-function fmtUsd(v: number): string {
+function fmtUsd(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return "—";
   if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
   if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
   if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
   return `$${v.toFixed(0)}`;
 }
 
-function fmtPct(v: number): string {
+function fmtPct(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return "—";
   return `${v.toFixed(1)}%`;
 }
 
-function fmtDate(iso: string): string {
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", {
     year: "numeric",
@@ -20,7 +23,8 @@ function fmtDate(iso: string): string {
   });
 }
 
-function fmtNum(v: number): string {
+function fmtNum(v: number | null | undefined): string {
+  if (v == null || isNaN(v)) return "—";
   return v.toLocaleString("en-US");
 }
 
@@ -463,24 +467,24 @@ export function renderDashboard(
     <!-- ═══ HEADLINE NUMBERS ═══ -->
     <div class="headline-grid">
       <div class="headline-stat">
-        <div class="number">${fmtNum(s!.tokensReached10M)}</div>
+        <div class="number">${fmtNum(s?.tokensReached10M)}</div>
         <div class="label">Tokens Hit $10M Market Cap</div>
-        <div class="sub">of ${fmtNum(s!.totalTokensAnalyzed)} total analyzed</div>
+        <div class="sub">of ${fmtNum(s?.totalTokensAnalyzed)} total analyzed</div>
       </div>
       <div class="headline-stat">
-        <div class="number green">${fmtNum(s!.tokensCurrentlyAbove10M)}</div>
+        <div class="number green">${fmtNum(s?.tokensCurrentlyAbove10M)}</div>
         <div class="label">Still Above $10M Today</div>
-        <div class="sub">${fmtPct(s!.totalTokensAnalyzed > 0 ? (s!.tokensCurrentlyAbove10M / s!.tokensReached10M) * 100 : 0)} retention rate</div>
+        <div class="sub">${fmtPct(s && s.tokensReached10M > 0 ? (s.tokensCurrentlyAbove10M / s.tokensReached10M) * 100 : 0)} retention rate</div>
       </div>
       <div class="headline-stat">
-        <div class="number accent">${fmtPct(h!.overallLossPercentage)}</div>
+        <div class="number accent">${fmtPct(h?.overallLossPercentage)}</div>
         <div class="label">Holders In Loss</div>
-        <div class="sub">${fmtNum(h!.totalHoldersAnalyzed)} wallets analyzed</div>
+        <div class="sub">${fmtNum(h?.totalHoldersAnalyzed)} wallets analyzed</div>
       </div>
       <div class="headline-stat">
-        <div class="number">${s!.medianDaysAbove10M.toFixed(0)}</div>
+        <div class="number">${s?.medianDaysAbove10M?.toFixed(0) ?? "—"}</div>
         <div class="label">Median Days Above $10M</div>
-        <div class="sub">avg ${s!.averageDaysAbove10M.toFixed(1)} days</div>
+        <div class="sub">avg ${s?.averageDaysAbove10M?.toFixed(1) ?? "—"} days</div>
       </div>
     </div>
 
@@ -511,27 +515,27 @@ export function renderDashboard(
           </div>
           <div class="stat-grid">
             <div class="stat-box">
-              <div class="val green">${fmtPct(h!.overallProfitPercentage)}</div>
+              <div class="val green">${fmtPct(h?.overallProfitPercentage)}</div>
               <div class="desc">Wallets in Profit</div>
             </div>
             <div class="stat-box">
-              <div class="val red">${fmtPct(h!.overallLossPercentage)}</div>
+              <div class="val red">${fmtPct(h?.overallLossPercentage)}</div>
               <div class="desc">Wallets in Loss</div>
             </div>
             <div class="stat-box">
-              <div class="val">${fmtUsd(h!.top10PercentMaxProfit)}</div>
+              <div class="val">${fmtUsd(h?.top10PercentMaxProfit)}</div>
               <div class="desc">Top Earner Profit</div>
             </div>
             <div class="stat-box">
-              <div class="val amber">${fmtUsd(h!.top10PercentAverageProfit)}</div>
+              <div class="val amber">${fmtUsd(h?.top10PercentAverageProfit)}</div>
               <div class="desc">Top 10% Avg Profit</div>
             </div>
             <div class="stat-box">
-              <div class="val">${fmtUsd(h!.top10PercentMedianProfit)}</div>
+              <div class="val">${fmtUsd(h?.top10PercentMedianProfit)}</div>
               <div class="desc">Top 10% Median Profit</div>
             </div>
             <div class="stat-box">
-              <div class="val">${fmtNum(h!.totalHoldersAnalyzed)}</div>
+              <div class="val">${fmtNum(h?.totalHoldersAnalyzed)}</div>
               <div class="desc">Total Wallets Analyzed</div>
             </div>
           </div>

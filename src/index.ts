@@ -295,7 +295,10 @@ function startHealthServer() {
   const server = createServer((req, res) => {
     if (req.url === "/") {
       // Load lightweight dashboard version (no dailyMarketCaps) to avoid OOM
-      const report = status.report || loadJson<DashboardReport>("latest-dashboard.json");
+      // Falls back to full report if dashboard file doesn't exist yet (first deploy)
+      const report = status.report
+        || loadJson<DashboardReport>("latest-dashboard.json")
+        || loadJson<DashboardReport>("latest-report.json");
       const html = renderDashboard(report, {
         state: status.state,
         phase: status.phase,
@@ -324,9 +327,11 @@ function startHealthServer() {
     }
 
     if (req.url === "/report/summary") {
-      const report = status.report || loadJson<DashboardReport>("latest-dashboard.json");
-      if (report) {
-        const { tokenDetails, ...summary } = report;
+      const summaryReport = status.report
+        || loadJson<DashboardReport>("latest-dashboard.json")
+        || loadJson<DashboardReport>("latest-report.json");
+      if (summaryReport) {
+        const { tokenDetails, ...summary } = summaryReport;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(summary, null, 2));
       } else {
