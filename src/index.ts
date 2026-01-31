@@ -9,6 +9,8 @@
 
 import "dotenv/config";
 import { createServer } from "http";
+import { createReadStream, existsSync } from "fs";
+import { stat } from "fs/promises";
 import { createCodexClient } from "./client/codex.js";
 import {
   discoverCurrentTokensAboveThreshold,
@@ -20,7 +22,7 @@ import { analyzeAllSurvivals } from "./modules/survival-analysis.js";
 import { generateReport } from "./report.js";
 import type { CodexConfig, TokenInfo, AggregateReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
-import { saveJson, loadJson, runFile } from "./utils/store.js";
+import { saveJson, loadJson, runFile, getFilePath } from "./utils/store.js";
 
 // ─── Global state for health check ──────────────────────────────────────
 
@@ -271,20 +273,42 @@ function startHealthServer() {
       return;
     }
 
-    if (req.url === "/report") {
+    if (req.url === "/report/summary") {
       if (status.report) {
+        const { tokenDetails, ...summary } = status.report;
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(status.report, null, 2));
+        res.end(JSON.stringify(summary, null, 2));
       } else {
-        // Try loading from disk
         const cached = loadJson<AggregateReport>("latest-report.json");
         if (cached) {
+          const { tokenDetails, ...summary } = cached;
           res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(cached, null, 2));
+          res.end(JSON.stringify(summary, null, 2));
         } else {
           res.writeHead(404, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "No report available yet" }));
         }
+      }
+      return;
+    }
+
+    if (req.url === "/report") {
+      // Stream the report file from disk to avoid OOM on large reports
+      const reportPath = getFilePath("latest-report.json");
+      if (existsSync(reportPath)) {
+        stat(reportPath).then((s) => {
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            "Content-Length": s.size,
+          });
+          createReadStream(reportPath).pipe(res);
+        }).catch(() => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Failed to read report file" }));
+        });
+      } else {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "No report available yet" }));
       }
       return;
     }

@@ -42,6 +42,10 @@ export function hasCache(name: string): boolean {
   return existsSync(filePath(name));
 }
 
+export function getFilePath(name: string): string {
+  return filePath(name);
+}
+
 /**
  * Run ID based on date — allows one fresh run per day,
  * reusing intermediate results within the same day.
