@@ -1,0 +1,201 @@
+/**
+ * Module 3: Holder Profit/Loss Analysis
+ *
+ * For each token that hit $10M market cap, analyzes wallet-level PnL:
+ * - How many holders are in profit vs loss
+ * - What the top 10% earners made
+ * - PnL distribution across all holders
+ *
+ * Uses filterTokenWallets to get wallet PnL data for each token.
+ */
+
+import type { GraphQLClient } from "graphql-request";
+import type {
+  CodexConfig,
+  HolderPnL,
+  TokenHolderAnalysis,
+} from "../types/index.js";
+import { QUERIES, rateLimitedQuery } from "../client/codex.js";
+import { paginateAll, median } from "../utils/helpers.js";
+
+interface TokenWalletResult {
+  walletAddress: string;
+  realizedPnlUsd: number;
+  unrealizedPnlUsd: number;
+  buyCount: number;
+  sellCount: number;
+}
+
+interface FilterTokenWalletsResponse {
+  filterTokenWallets: {
+    results: TokenWalletResult[];
+    count: number;
+  };
+}
+
+/**
+ * Fetch wallet PnL data for a specific token.
+ * Sorted by realized PnL descending to get top earners first.
+ */
+async function fetchTokenWallets(
+  client: GraphQLClient,
+  tokenAddress: string,
+  networkId: number,
+  maxWallets = 1000
+): Promise<HolderPnL[]> {
+  const PAGE_SIZE = 200;
+  const maxPages = Math.ceil(maxWallets / PAGE_SIZE);
+
+  const results = await paginateAll<TokenWalletResult>(
+    async (offset) => {
+      const data = await rateLimitedQuery<FilterTokenWalletsResponse>(
+        client,
+        QUERIES.FILTER_TOKEN_WALLETS,
+        {
+          tokenAddress,
+          networkId,
+          limit: PAGE_SIZE,
+          offset,
+          rankings: [
+            {
+              attribute: "realizedPnlUsd",
+              direction: "DESC",
+            },
+          ],
+        }
+      );
+      return {
+        results: data.filterTokenWallets.results,
+        count: data.filterTokenWallets.count,
+      };
+    },
+    PAGE_SIZE,
+    maxPages
+  );
+
+  return results.map((r) => ({
+    walletAddress: r.walletAddress,
+    tokenAddress,
+    realizedPnlUsd: r.realizedPnlUsd ?? 0,
+    unrealizedPnlUsd: r.unrealizedPnlUsd ?? 0,
+    totalPnlUsd: (r.realizedPnlUsd ?? 0) + (r.unrealizedPnlUsd ?? 0),
+    buyCount: r.buyCount ?? 0,
+    sellCount: r.sellCount ?? 0,
+    inProfit: (r.realizedPnlUsd ?? 0) + (r.unrealizedPnlUsd ?? 0) > 0,
+  }));
+}
+
+/**
+ * Analyze holder PnL distribution for a single token.
+ */
+export async function analyzeTokenHolders(
+  client: GraphQLClient,
+  tokenAddress: string,
+  symbol: string,
+  networkId: number
+): Promise<TokenHolderAnalysis> {
+  const wallets = await fetchTokenWallets(client, tokenAddress, networkId);
+
+  const totalAnalyzed = wallets.length;
+  const inProfit = wallets.filter((w) => w.totalPnlUsd > 0).length;
+  const inLoss = wallets.filter((w) => w.totalPnlUsd < 0).length;
+  const breakeven = wallets.filter((w) => w.totalPnlUsd === 0).length;
+
+  // Top 10% analysis
+  const sortedByProfit = [...wallets].sort(
+    (a, b) => b.totalPnlUsd - a.totalPnlUsd
+  );
+  const top10Count = Math.max(1, Math.ceil(totalAnalyzed * 0.1));
+  const top10Wallets = sortedByProfit.slice(0, top10Count);
+  const top10Profits = top10Wallets.map((w) => w.totalPnlUsd);
+
+  // PnL distribution — bucketed by percentage gain/loss
+  // Since we don't have cost basis %, we use absolute PnL buckets
+  const pnlValues = wallets.map((w) => w.totalPnlUsd);
+
+  return {
+    tokenAddress,
+    symbol,
+    totalHoldersAnalyzed: totalAnalyzed,
+    holdersInProfit: inProfit,
+    holdersInLoss: inLoss,
+    holdersBreakeven: breakeven,
+    profitPercentage:
+      totalAnalyzed > 0 ? (inProfit / totalAnalyzed) * 100 : 0,
+    top10PercentStats: {
+      count: top10Count,
+      totalProfit: top10Profits.reduce((s, v) => s + v, 0),
+      averageProfit:
+        top10Count > 0
+          ? top10Profits.reduce((s, v) => s + v, 0) / top10Count
+          : 0,
+      medianProfit: median(top10Profits),
+      maxProfit: top10Profits[0] ?? 0,
+      minProfitInTopDecile: top10Profits[top10Profits.length - 1] ?? 0,
+    },
+    pnlDistribution: computePnlDistribution(pnlValues),
+  };
+}
+
+/**
+ * Categorize PnL values into distribution buckets.
+ * Uses absolute USD thresholds since we don't have percentage returns.
+ */
+function computePnlDistribution(
+  pnlValues: number[]
+): TokenHolderAnalysis["pnlDistribution"] {
+  const dist = {
+    bigLoss: 0,
+    moderateLoss: 0,
+    breakeven: 0,
+    moderateGain: 0,
+    bigGain: 0,
+  };
+
+  for (const pnl of pnlValues) {
+    if (pnl < -1000) dist.bigLoss++;
+    else if (pnl < -10) dist.moderateLoss++;
+    else if (pnl <= 10) dist.breakeven++;
+    else if (pnl <= 1000) dist.moderateGain++;
+    else dist.bigGain++;
+  }
+
+  return dist;
+}
+
+/**
+ * Batch analyze holders for multiple tokens.
+ */
+export async function analyzeAllTokenHolders(
+  client: GraphQLClient,
+  tokens: Array<{ address: string; symbol: string; networkId: number }>,
+  _config: CodexConfig
+): Promise<TokenHolderAnalysis[]> {
+  const results: TokenHolderAnalysis[] = [];
+
+  for (const token of tokens) {
+    try {
+      const analysis = await analyzeTokenHolders(
+        client,
+        token.address,
+        token.symbol,
+        token.networkId
+      );
+      results.push(analysis);
+      console.log(
+        `  [holders] ${token.symbol}: ${analysis.holdersInProfit}/${analysis.totalHoldersAnalyzed} in profit ` +
+          `(${analysis.profitPercentage.toFixed(1)}%), top10% avg=${formatUsd(analysis.top10PercentStats.averageProfit)}`
+      );
+    } catch (err) {
+      console.error(`  [holders] Error analyzing ${token.symbol}:`, err);
+    }
+  }
+
+  return results;
+}
+
+function formatUsd(v: number): string {
+  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(1)}M`;
+  if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+}

@@ -1,0 +1,206 @@
+/**
+ * Module 2: Market Cap Trajectory Analysis
+ *
+ * For each discovered token, fetches historical OHLCV data and computes:
+ * - Whether it ever crossed $10M market cap
+ * - When it first crossed
+ * - How long it stayed above
+ * - Peak market cap
+ * - Current status
+ *
+ * Approach: Use getBars with daily resolution, multiply close price by
+ * current supply to estimate historical market cap.
+ *
+ * Known limitation: Uses current supply for all historical points since
+ * Codex.io does not provide historical supply data.
+ */
+
+import type { GraphQLClient } from "graphql-request";
+import type {
+  CodexConfig,
+  TokenInfo,
+  MarketCapTrajectory,
+  OHLCVBar,
+} from "../types/index.js";
+import { QUERIES, rateLimitedQuery } from "../client/codex.js";
+import {
+  toUnixSeconds,
+  fromUnixSeconds,
+  barSymbol,
+  SOLANA_DATA_START,
+} from "../utils/helpers.js";
+
+interface BarsResponse {
+  getBars: {
+    o: number[];
+    h: number[];
+    l: number[];
+    c: number[];
+    v: number[];
+    t: number[];
+    s: string; // "ok" or "no_data"
+  };
+}
+
+/**
+ * Fetch daily OHLCV bars for a token's primary pair.
+ */
+async function fetchDailyBars(
+  client: GraphQLClient,
+  pairAddress: string,
+  networkId: number
+): Promise<OHLCVBar[]> {
+  const from = toUnixSeconds(SOLANA_DATA_START);
+  const to = toUnixSeconds(new Date());
+  const symbol = barSymbol(pairAddress, networkId);
+
+  const data = await rateLimitedQuery<BarsResponse>(client, QUERIES.GET_BARS, {
+    symbol,
+    from,
+    to,
+    resolution: "1D",
+  });
+
+  if (data.getBars.s !== "ok" || !data.getBars.t.length) {
+    return [];
+  }
+
+  return data.getBars.t.map((t, i) => ({
+    timestamp: t,
+    open: data.getBars.o[i],
+    high: data.getBars.h[i],
+    low: data.getBars.l[i],
+    close: data.getBars.c[i],
+    volume: data.getBars.v[i],
+  }));
+}
+
+/**
+ * Estimate the supply multiplier from the token info.
+ * If circulating supply is available, prefer it; otherwise use total supply.
+ */
+function getSupplyMultiplier(token: TokenInfo): number {
+  const supply =
+    token.circulatingSupply ?? token.totalSupply;
+  if (!supply) {
+    // Fallback: derive from current price & market cap
+    if (token.priceUsd > 0) {
+      return token.marketCapUsd / token.priceUsd;
+    }
+    return 0;
+  }
+  return parseFloat(supply);
+}
+
+/**
+ * Analyze the market cap trajectory for a single token.
+ */
+export async function analyzeTrajectory(
+  client: GraphQLClient,
+  token: TokenInfo,
+  config: CodexConfig
+): Promise<MarketCapTrajectory> {
+  const result: MarketCapTrajectory = {
+    tokenAddress: token.address,
+    symbol: token.symbol,
+    reachedThreshold: false,
+    firstCrossTimestamp: null,
+    currentlyAbove: false,
+    daysAboveThreshold: 0,
+    peakMarketCap: 0,
+    peakTimestamp: null,
+    currentMarketCap: token.marketCapUsd,
+    dailyMarketCaps: [],
+  };
+
+  if (!token.primaryPairAddress) {
+    // No pair data — check if current market cap is above threshold
+    result.reachedThreshold = token.marketCapUsd >= config.marketCapThreshold;
+    result.currentlyAbove = result.reachedThreshold;
+    result.peakMarketCap = token.marketCapUsd;
+    return result;
+  }
+
+  const bars = await fetchDailyBars(
+    client,
+    token.primaryPairAddress,
+    token.networkId
+  );
+
+  if (bars.length === 0) {
+    result.reachedThreshold = token.marketCapUsd >= config.marketCapThreshold;
+    result.currentlyAbove = result.reachedThreshold;
+    result.peakMarketCap = token.marketCapUsd;
+    return result;
+  }
+
+  const supplyMultiplier = getSupplyMultiplier(token);
+
+  for (const bar of bars) {
+    // Estimate market cap using the high price (to detect if it ever touched $10M)
+    const highMcap = bar.high * supplyMultiplier;
+    const closeMcap = bar.close * supplyMultiplier;
+
+    result.dailyMarketCaps.push({
+      timestamp: bar.timestamp,
+      marketCap: closeMcap,
+    });
+
+    if (highMcap >= config.marketCapThreshold) {
+      result.reachedThreshold = true;
+      if (!result.firstCrossTimestamp) {
+        result.firstCrossTimestamp = bar.timestamp;
+      }
+    }
+
+    if (closeMcap >= config.marketCapThreshold) {
+      result.daysAboveThreshold++;
+    }
+
+    if (highMcap > result.peakMarketCap) {
+      result.peakMarketCap = highMcap;
+      result.peakTimestamp = bar.timestamp;
+    }
+  }
+
+  // Check current status
+  const lastBar = bars[bars.length - 1];
+  const lastCloseMcap = lastBar.close * supplyMultiplier;
+  result.currentlyAbove = lastCloseMcap >= config.marketCapThreshold;
+  result.currentMarketCap = lastCloseMcap;
+
+  return result;
+}
+
+/**
+ * Batch-analyze trajectories for multiple tokens.
+ */
+export async function analyzeAllTrajectories(
+  client: GraphQLClient,
+  tokens: TokenInfo[],
+  config: CodexConfig
+): Promise<MarketCapTrajectory[]> {
+  const results: MarketCapTrajectory[] = [];
+
+  for (const token of tokens) {
+    try {
+      const trajectory = await analyzeTrajectory(client, token, config);
+      results.push(trajectory);
+      console.log(
+        `  [trajectory] ${token.symbol}: reached=$${trajectory.reachedThreshold}, ` +
+          `peak=${formatMcap(trajectory.peakMarketCap)}, days_above=${trajectory.daysAboveThreshold}`
+      );
+    } catch (err) {
+      console.error(`  [trajectory] Error analyzing ${token.symbol}:`, err);
+    }
+  }
+
+  return results;
+}
+
+function formatMcap(value: number): string {
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `$${(value / 1e3).toFixed(1)}K`;
+  return `$${value.toFixed(0)}`;
+}

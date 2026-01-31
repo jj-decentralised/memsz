@@ -1,0 +1,26 @@
+{
+  "name": "solana-token-analysis",
+  "version": "1.0.0",
+  "description": "Research project analyzing Solana ecosystem tokens using Codex.io API - market cap milestones, holder P&L, and token survival rates",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "discover": "tsx src/scripts/discover-tokens.ts",
+    "trajectory": "tsx src/scripts/analyze-trajectory.ts",
+    "holders": "tsx src/scripts/analyze-holders.ts",
+    "survival": "tsx src/scripts/analyze-survival.ts",
+    "report": "tsx src/scripts/generate-report.ts"
+  },
+  "dependencies": {
+    "graphql": "^16.8.1",
+    "graphql-request": "^6.1.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.11.0"
+  }
+}
