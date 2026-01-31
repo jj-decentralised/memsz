@@ -3,11 +3,6 @@
  *
  * Determines whether tokens "survive" at 30, 90, and 365 day checkpoints.
  * Survival = liquidity pool > $100,000 at the checkpoint date.
- *
- * Strategy:
- * - For each token, find its primary pair.
- * - Use getDetailedPairStats to get liquidity data at specific time windows.
- * - Check liquidity at 30/90/365 days after the token first hit $10M.
  */
 
 import type { GraphQLClient } from "graphql-request";
@@ -21,7 +16,6 @@ import { QUERIES, rateLimitedQuery } from "../client/codex.js";
 import {
   toUnixSeconds,
   fromUnixSeconds,
-  barSymbol,
   SOLANA_DATA_START,
 } from "../utils/helpers.js";
 
@@ -51,9 +45,6 @@ interface DetailedPairStatsResponse {
 
 const SECONDS_PER_DAY = 86400;
 
-/**
- * Get current total liquidity across all pairs for a token.
- */
 async function getCurrentLiquidity(
   client: GraphQLClient,
   tokenAddress: string,
@@ -71,8 +62,6 @@ async function getCurrentLiquidity(
   }
 
   const totalLiquidity = pairs.reduce((sum, p) => sum + (p.liquidity ?? 0), 0);
-
-  // Primary pair = highest liquidity
   const sorted = [...pairs].sort(
     (a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0)
   );
@@ -83,10 +72,6 @@ async function getCurrentLiquidity(
   };
 }
 
-/**
- * Get the liquidity at a specific date by looking at detailed pair stats.
- * We look at stats around the target date.
- */
 async function getLiquidityAtDate(
   client: GraphQLClient,
   pairAddress: string,
@@ -103,7 +88,6 @@ async function getLiquidityAtDate(
         tokenOfInterest: "token0",
         statsType: "UNFILTERED",
         timestamp: {
-          // Look at a window around the target date
           current: targetTimestamp,
           previous: targetTimestamp - SECONDS_PER_DAY,
         },
@@ -112,7 +96,6 @@ async function getLiquidityAtDate(
 
     const stats = data.getDetailedPairStats?.stats_day1;
     if (stats && stats.length > 0) {
-      // Return the liquidity from the closest data point
       return stats[0].statsUsd.liquidity.currentValue;
     }
     return null;
@@ -121,9 +104,6 @@ async function getLiquidityAtDate(
   }
 }
 
-/**
- * Analyze survival for a single token.
- */
 export async function analyzeSurvival(
   client: GraphQLClient,
   token: TokenInfo,
@@ -149,7 +129,6 @@ export async function analyzeSurvival(
     currentlyAlive: totalLiquidity >= config.liquiditySurvivalThreshold,
   };
 
-  // If no trajectory data or no pair, return with current data only
   if (!trajectory.firstCrossTimestamp || !primaryPair) {
     return result;
   }
@@ -157,7 +136,6 @@ export async function analyzeSurvival(
   const firstCrossTs = trajectory.firstCrossTimestamp;
   const now = toUnixSeconds(new Date());
 
-  // Check each checkpoint
   const checkpoints = [
     { key: "days30" as const, days: 30 },
     { key: "days90" as const, days: 90 },
@@ -167,16 +145,8 @@ export async function analyzeSurvival(
   for (const cp of checkpoints) {
     const checkpointTs = firstCrossTs + cp.days * SECONDS_PER_DAY;
 
-    // Only check if enough time has elapsed
-    if (checkpointTs > now) {
-      // Not enough time has passed yet
-      continue;
-    }
-
-    // Also check if the date is within Codex's data range
-    if (checkpointTs < toUnixSeconds(SOLANA_DATA_START)) {
-      continue;
-    }
+    if (checkpointTs > now) continue;
+    if (checkpointTs < toUnixSeconds(SOLANA_DATA_START)) continue;
 
     const liquidity = await getLiquidityAtDate(
       client,
@@ -194,7 +164,6 @@ export async function analyzeSurvival(
     }
   }
 
-  // Get liquidity at discovery
   const discoveryLiquidity = await getLiquidityAtDate(
     client,
     primaryPair,
@@ -207,24 +176,27 @@ export async function analyzeSurvival(
 }
 
 /**
- * Batch survival analysis for multiple tokens.
+ * Batch survival analysis for multiple tokens with progress tracking.
  */
 export async function analyzeAllSurvivals(
   client: GraphQLClient,
   tokens: TokenInfo[],
   trajectories: MarketCapTrajectory[],
-  config: CodexConfig
+  config: CodexConfig,
+  onProgress?: (survival: SurvivalAnalysis, index: number, total: number) => void
 ): Promise<SurvivalAnalysis[]> {
   const trajectoryMap = new Map(
     trajectories.map((t) => [t.tokenAddress, t])
   );
   const results: SurvivalAnalysis[] = [];
 
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     const trajectory = trajectoryMap.get(token.address);
     if (!trajectory) continue;
 
     try {
+      console.log(`  [survival] (${i + 1}/${tokens.length}) Analyzing ${token.symbol}...`);
       const survival = await analyzeSurvival(client, token, trajectory, config);
       results.push(survival);
 
@@ -235,6 +207,7 @@ export async function analyzeAllSurvivals(
         `  [survival] ${token.symbol}: current_liq=$${(survival.currentLiquidity / 1e3).toFixed(0)}K ` +
           `30d=${alive30} 90d=${alive90} 365d=${alive365}`
       );
+      onProgress?.(survival, i, tokens.length);
     } catch (err) {
       console.error(`  [survival] Error analyzing ${token.symbol}:`, err);
     }

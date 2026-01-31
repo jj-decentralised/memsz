@@ -25,7 +25,6 @@ import type {
 import { QUERIES, rateLimitedQuery } from "../client/codex.js";
 import {
   toUnixSeconds,
-  fromUnixSeconds,
   barSymbol,
   SOLANA_DATA_START,
 } from "../utils/helpers.js";
@@ -38,13 +37,10 @@ interface BarsResponse {
     c: number[];
     v: number[];
     t: number[];
-    s: string; // "ok" or "no_data"
+    s: string;
   };
 }
 
-/**
- * Fetch daily OHLCV bars for a token's primary pair.
- */
 async function fetchDailyBars(
   client: GraphQLClient,
   pairAddress: string,
@@ -75,15 +71,9 @@ async function fetchDailyBars(
   }));
 }
 
-/**
- * Estimate the supply multiplier from the token info.
- * If circulating supply is available, prefer it; otherwise use total supply.
- */
 function getSupplyMultiplier(token: TokenInfo): number {
-  const supply =
-    token.circulatingSupply ?? token.totalSupply;
+  const supply = token.circulatingSupply ?? token.totalSupply;
   if (!supply) {
-    // Fallback: derive from current price & market cap
     if (token.priceUsd > 0) {
       return token.marketCapUsd / token.priceUsd;
     }
@@ -92,9 +82,6 @@ function getSupplyMultiplier(token: TokenInfo): number {
   return parseFloat(supply);
 }
 
-/**
- * Analyze the market cap trajectory for a single token.
- */
 export async function analyzeTrajectory(
   client: GraphQLClient,
   token: TokenInfo,
@@ -114,7 +101,6 @@ export async function analyzeTrajectory(
   };
 
   if (!token.primaryPairAddress) {
-    // No pair data — check if current market cap is above threshold
     result.reachedThreshold = token.marketCapUsd >= config.marketCapThreshold;
     result.currentlyAbove = result.reachedThreshold;
     result.peakMarketCap = token.marketCapUsd;
@@ -137,7 +123,6 @@ export async function analyzeTrajectory(
   const supplyMultiplier = getSupplyMultiplier(token);
 
   for (const bar of bars) {
-    // Estimate market cap using the high price (to detect if it ever touched $10M)
     const highMcap = bar.high * supplyMultiplier;
     const closeMcap = bar.close * supplyMultiplier;
 
@@ -163,7 +148,6 @@ export async function analyzeTrajectory(
     }
   }
 
-  // Check current status
   const lastBar = bars[bars.length - 1];
   const lastCloseMcap = lastBar.close * supplyMultiplier;
   result.currentlyAbove = lastCloseMcap >= config.marketCapThreshold;
@@ -174,22 +158,27 @@ export async function analyzeTrajectory(
 
 /**
  * Batch-analyze trajectories for multiple tokens.
+ * Reports progress and calls onProgress after each token.
  */
 export async function analyzeAllTrajectories(
   client: GraphQLClient,
   tokens: TokenInfo[],
-  config: CodexConfig
+  config: CodexConfig,
+  onProgress?: (trajectory: MarketCapTrajectory, index: number, total: number) => void
 ): Promise<MarketCapTrajectory[]> {
   const results: MarketCapTrajectory[] = [];
 
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     try {
+      console.log(`  [trajectory] (${i + 1}/${tokens.length}) Analyzing ${token.symbol}...`);
       const trajectory = await analyzeTrajectory(client, token, config);
       results.push(trajectory);
       console.log(
-        `  [trajectory] ${token.symbol}: reached=$${trajectory.reachedThreshold}, ` +
+        `  [trajectory] ${token.symbol}: reached=${trajectory.reachedThreshold}, ` +
           `peak=${formatMcap(trajectory.peakMarketCap)}, days_above=${trajectory.daysAboveThreshold}`
       );
+      onProgress?.(trajectory, i, tokens.length);
     } catch (err) {
       console.error(`  [trajectory] Error analyzing ${token.symbol}:`, err);
     }

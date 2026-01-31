@@ -7,6 +7,7 @@
  * - PnL distribution across all holders
  *
  * Uses filterTokenWallets to get wallet PnL data for each token.
+ * Pulls up to 5000 wallets per token for complete coverage.
  */
 
 import type { GraphQLClient } from "graphql-request";
@@ -35,13 +36,13 @@ interface FilterTokenWalletsResponse {
 
 /**
  * Fetch wallet PnL data for a specific token.
- * Sorted by realized PnL descending to get top earners first.
+ * Pulls up to maxWallets (default 5000) for thorough coverage.
  */
 async function fetchTokenWallets(
   client: GraphQLClient,
   tokenAddress: string,
   networkId: number,
-  maxWallets = 1000
+  maxWallets = 5000
 ): Promise<HolderPnL[]> {
   const PAGE_SIZE = 200;
   const maxPages = Math.ceil(maxWallets / PAGE_SIZE);
@@ -109,8 +110,6 @@ export async function analyzeTokenHolders(
   const top10Wallets = sortedByProfit.slice(0, top10Count);
   const top10Profits = top10Wallets.map((w) => w.totalPnlUsd);
 
-  // PnL distribution — bucketed by percentage gain/loss
-  // Since we don't have cost basis %, we use absolute PnL buckets
   const pnlValues = wallets.map((w) => w.totalPnlUsd);
 
   return {
@@ -137,10 +136,6 @@ export async function analyzeTokenHolders(
   };
 }
 
-/**
- * Categorize PnL values into distribution buckets.
- * Uses absolute USD thresholds since we don't have percentage returns.
- */
 function computePnlDistribution(
   pnlValues: number[]
 ): TokenHolderAnalysis["pnlDistribution"] {
@@ -165,16 +160,20 @@ function computePnlDistribution(
 
 /**
  * Batch analyze holders for multiple tokens.
+ * Saves progress after each token so partial results survive crashes.
  */
 export async function analyzeAllTokenHolders(
   client: GraphQLClient,
   tokens: Array<{ address: string; symbol: string; networkId: number }>,
-  _config: CodexConfig
+  _config: CodexConfig,
+  onProgress?: (analysis: TokenHolderAnalysis, index: number, total: number) => void
 ): Promise<TokenHolderAnalysis[]> {
   const results: TokenHolderAnalysis[] = [];
 
-  for (const token of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
     try {
+      console.log(`  [holders] (${i + 1}/${tokens.length}) Analyzing ${token.symbol}...`);
       const analysis = await analyzeTokenHolders(
         client,
         token.address,
@@ -186,6 +185,7 @@ export async function analyzeAllTokenHolders(
         `  [holders] ${token.symbol}: ${analysis.holdersInProfit}/${analysis.totalHoldersAnalyzed} in profit ` +
           `(${analysis.profitPercentage.toFixed(1)}%), top10% avg=${formatUsd(analysis.top10PercentStats.averageProfit)}`
       );
+      onProgress?.(analysis, i, tokens.length);
     } catch (err) {
       console.error(`  [holders] Error analyzing ${token.symbol}:`, err);
     }

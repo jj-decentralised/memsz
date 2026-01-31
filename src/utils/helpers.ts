@@ -51,11 +51,12 @@ export function formatUsd(value: number): string {
 
 /**
  * Paginate through a Codex.io query that uses offset-based pagination.
+ * Exhaustive by default — no arbitrary page caps. Set maxPages to limit.
  */
 export async function paginateAll<T>(
   fetchPage: (offset: number) => Promise<{ results: T[]; count: number }>,
   pageSize = 200,
-  maxPages = 50
+  maxPages = 500
 ): Promise<T[]> {
   const all: T[] = [];
   let offset = 0;
@@ -64,7 +65,9 @@ export async function paginateAll<T>(
     const { results, count } = await fetchPage(offset);
     all.push(...results);
 
-    if (all.length >= count || results.length < pageSize) {
+    console.log(`    [paginate] page ${page + 1}: got ${results.length} items (${all.length}/${count} total)`);
+
+    if (all.length >= count || results.length < pageSize || results.length === 0) {
       break;
     }
     offset += pageSize;
