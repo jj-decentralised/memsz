@@ -88,6 +88,10 @@ export interface TokenHolderAnalysis {
     moderateGain: number;  // +10% to +100%
     bigGain: number;       // > +100%
   };
+  /** Top performing wallets (most profit) */
+  topProfitWallets: HolderPnL[];
+  /** Worst performing wallets (biggest loss) */
+  topLossWallets: HolderPnL[];
 }
 
 export interface SurvivalAnalysis {

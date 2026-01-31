@@ -82,11 +82,16 @@ export async function discoverCurrentTokensAboveThreshold(
 
 /**
  * Discover tokens currently below the threshold that may have historically
- * crossed it. Three sweeps to maximize coverage:
+ * crossed it. Multiple sweeps to maximize coverage since the API only filters
+ * on CURRENT values — there's no "all-time high" market cap filter.
  *
- * 1. Tokens $1M–$10M mcap with liquidity > $100K (likely once bigger)
- * 2. Tokens $100K–$1M mcap with liquidity > $500K (decayed but liquid)
- * 3. Tokens with very high 24h volume relative to mcap (momentum plays)
+ * A token that once hit $10M market cap will typically still have one of:
+ * - Meaningful liquidity (even if mcap crashed)
+ * - Significant holder count
+ * - Some trading volume
+ *
+ * We cast a wide net and let Phase 2 (trajectory analysis) determine which
+ * tokens actually crossed $10M historically via OHLCV data.
  */
 export async function discoverHistoricalCandidates(
   client: GraphQLClient,
@@ -95,63 +100,92 @@ export async function discoverHistoricalCandidates(
   const PAGE_SIZE = 200;
   const allResults: FilterTokenResult[] = [];
 
-  // Sweep 1: $1M–$10M mcap, any meaningful liquidity
-  console.log("  [discover] Sweep 1: tokens $1M-$10M mcap with liquidity > $100K...");
-  const sweep1 = await paginateAll<FilterTokenResult>(
-    async (offset) => {
-      const data = await rateLimitedQuery<FilterTokensResponse>(
-        client,
-        QUERIES.FILTER_TOKENS,
-        {
-          filters: {
-            network: [config.solanaNetworkId],
-            liquidity: { gte: 100_000 },
-            marketCap: {
-              gte: 1_000_000,
-              lt: config.marketCapThreshold,
-            },
-          },
-          limit: PAGE_SIZE,
-          offset,
-        }
-      );
-      return {
-        results: data.filterTokens.results,
-        count: data.filterTokens.count,
-      };
+  const sweeps: Array<{
+    name: string;
+    filters: Record<string, unknown>;
+  }> = [
+    // Sweep 1: $1M–$10M mcap with any meaningful liquidity
+    {
+      name: "tokens $1M-$10M mcap, liquidity > $50K",
+      filters: {
+        network: [config.solanaNetworkId],
+        liquidity: { gte: 50_000 },
+        marketCap: { gte: 1_000_000, lt: config.marketCapThreshold },
+      },
     },
-    PAGE_SIZE
-  );
-  allResults.push(...sweep1);
+    // Sweep 2: $100K–$1M mcap with significant liquidity
+    {
+      name: "tokens $100K-$1M mcap, liquidity > $100K",
+      filters: {
+        network: [config.solanaNetworkId],
+        liquidity: { gte: 100_000 },
+        marketCap: { gte: 100_000, lt: 1_000_000 },
+      },
+    },
+    // Sweep 3: Any mcap but very high liquidity (tokens that crashed but still liquid)
+    {
+      name: "any mcap, liquidity > $500K",
+      filters: {
+        network: [config.solanaNetworkId],
+        liquidity: { gte: 500_000 },
+      },
+    },
+    // Sweep 4: High holder count (tokens that attracted many wallets likely had high mcap)
+    {
+      name: "holders > 1000, mcap > $50K",
+      filters: {
+        network: [config.solanaNetworkId],
+        holders: { gte: 1000 },
+        marketCap: { gte: 50_000 },
+      },
+    },
+    // Sweep 5: High 24h volume (active trading suggests relevance)
+    {
+      name: "volume24 > $500K",
+      filters: {
+        network: [config.solanaNetworkId],
+        volume24: { gte: 500_000 },
+      },
+    },
+    // Sweep 6: Very low mcap but still some liquidity (deep crash survivors)
+    {
+      name: "mcap $10K-$100K, liquidity > $50K",
+      filters: {
+        network: [config.solanaNetworkId],
+        liquidity: { gte: 50_000 },
+        marketCap: { gte: 10_000, lt: 100_000 },
+      },
+    },
+  ];
 
-  // Sweep 2: $100K–$1M mcap but still has significant liquidity
-  console.log("  [discover] Sweep 2: tokens $100K-$1M mcap with liquidity > $500K...");
-  const sweep2 = await paginateAll<FilterTokenResult>(
-    async (offset) => {
-      const data = await rateLimitedQuery<FilterTokensResponse>(
-        client,
-        QUERIES.FILTER_TOKENS,
-        {
-          filters: {
-            network: [config.solanaNetworkId],
-            liquidity: { gte: 500_000 },
-            marketCap: {
-              gte: 100_000,
-              lt: 1_000_000,
-            },
-          },
-          limit: PAGE_SIZE,
-          offset,
-        }
+  for (let i = 0; i < sweeps.length; i++) {
+    const sweep = sweeps[i];
+    console.log(`  [discover] Sweep ${i + 1}/${sweeps.length}: ${sweep.name}...`);
+    try {
+      const results = await paginateAll<FilterTokenResult>(
+        async (offset) => {
+          const data = await rateLimitedQuery<FilterTokensResponse>(
+            client,
+            QUERIES.FILTER_TOKENS,
+            {
+              filters: sweep.filters,
+              limit: PAGE_SIZE,
+              offset,
+            }
+          );
+          return {
+            results: data.filterTokens.results,
+            count: data.filterTokens.count,
+          };
+        },
+        PAGE_SIZE
       );
-      return {
-        results: data.filterTokens.results,
-        count: data.filterTokens.count,
-      };
-    },
-    PAGE_SIZE
-  );
-  allResults.push(...sweep2);
+      console.log(`  [discover] Sweep ${i + 1}: found ${results.length} tokens`);
+      allResults.push(...results);
+    } catch (err) {
+      console.error(`  [discover] Sweep ${i + 1} error:`, err);
+    }
+  }
 
   // Deduplicate by address
   const seen = new Set<string>();

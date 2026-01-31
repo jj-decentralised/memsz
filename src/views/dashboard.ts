@@ -598,7 +598,7 @@ export function renderDashboard(
                   data-s365="${s365 ? (s365.alive ? 1 : 0) : -1}"
                   data-alive="${alive ? 1 : 0}">
                 <td style="color:var(--ink-tertiary)">${i + 1}</td>
-                <td class="symbol">${t.symbol}</td>
+                <td class="symbol"><a href="/token/${t.address}" style="text-decoration:none;color:var(--ink);font-weight:600">${t.symbol}</a></td>
                 <td class="num">${fmtUsd(peakMcap)}</td>
                 <td class="num">${fmtUsd(currentMcap)}</td>
                 <td class="num">${daysAbove}</td>

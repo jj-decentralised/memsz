@@ -26,7 +26,7 @@ interface PairListResponse {
   listPairsWithMetadataForToken: {
     results: Array<{
       pair: { address: string; token0: string; token1: string };
-      liquidity: number;
+      liquidity: string; // GraphQL String! — must parseFloat
     }>;
   };
 }
@@ -68,10 +68,13 @@ async function getCurrentLiquidity(
     return { totalLiquidity: 0, primaryPair: null };
   }
 
-  const totalLiquidity = pairs.reduce((sum, p) => sum + (p.liquidity ?? 0), 0);
-  const sorted = [...pairs].sort(
-    (a, b) => (b.liquidity ?? 0) - (a.liquidity ?? 0)
-  );
+  // liquidity is String! in the GraphQL schema — must parseFloat
+  const parsedPairs = pairs.map((p) => ({
+    ...p,
+    liqUsd: parseFloat(p.liquidity as string) || 0,
+  }));
+  const totalLiquidity = parsedPairs.reduce((sum, p) => sum + p.liqUsd, 0);
+  const sorted = [...parsedPairs].sort((a, b) => b.liqUsd - a.liqUsd);
 
   return {
     totalLiquidity,

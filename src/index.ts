@@ -9,7 +9,7 @@
 
 import "dotenv/config";
 import { createServer } from "http";
-import { createReadStream, existsSync } from "fs";
+import { createReadStream, existsSync, readFileSync } from "fs";
 import { stat } from "fs/promises";
 import { createCodexClient } from "./client/codex.js";
 import {
@@ -20,10 +20,11 @@ import { analyzeAllTrajectories } from "./modules/market-cap-trajectory.js";
 import { analyzeAllTokenHolders } from "./modules/holder-analysis.js";
 import { analyzeAllSurvivals } from "./modules/survival-analysis.js";
 import { generateReport, generateDashboardReport } from "./report.js";
-import type { CodexConfig, TokenInfo, DashboardReport } from "./types/index.js";
+import type { CodexConfig, TokenInfo, DashboardReport, AggregateReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
 import { saveJson, loadJson, runFile, getFilePath, clearAllCache } from "./utils/store.js";
 import { renderDashboard } from "./views/dashboard.js";
+import { renderTokenProfile } from "./views/token-profile.js";
 
 // ─── Global state for health check ──────────────────────────────────────
 
@@ -307,6 +308,44 @@ function startHealthServer() {
         });
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(html);
+        return;
+      }
+
+      // Token profile page: /token/<address>
+      if (req.url?.startsWith("/token/")) {
+        const address = req.url.slice(7).split("?")[0];
+        if (!address) {
+          res.writeHead(400, { "Content-Type": "text/html" });
+          res.end("<h1>Missing token address</h1>");
+          return;
+        }
+
+        // Load full report for this token (needs dailyMarketCaps for chart)
+        // Stream-parse just the token we need to avoid loading entire 11MB
+        const reportPath = getFilePath("latest-report.json");
+        if (existsSync(reportPath)) {
+          const raw = readFileSync(reportPath, "utf-8");
+          const fullReport = JSON.parse(raw) as AggregateReport;
+          const token = fullReport.tokenDetails.find((t) => t.address === address);
+
+          if (token) {
+            const html = renderTokenProfile({
+              address: token.address,
+              symbol: token.symbol,
+              trajectory: token.trajectory,
+              holders: token.holders,
+              survival: token.survival,
+            });
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(html);
+          } else {
+            res.writeHead(404, { "Content-Type": "text/html" });
+            res.end(`<h1>Token not found</h1><p>Address: ${address}</p><p><a href="/">Back to dashboard</a></p>`);
+          }
+        } else {
+          res.writeHead(404, { "Content-Type": "text/html" });
+          res.end("<h1>No report data yet</h1><p><a href='/'>Back to dashboard</a></p>");
+        }
         return;
       }
 

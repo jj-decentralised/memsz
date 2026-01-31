@@ -124,6 +124,10 @@ export async function analyzeTokenHolders(
 
   const pnlValues = wallets.map((w) => w.totalPnlUsd);
 
+  // Top 20 most profitable and bottom 20 biggest losers for profile pages
+  const topProfitWallets = sortedByProfit.slice(0, 20);
+  const topLossWallets = sortedByProfit.slice(-20).reverse();
+
   return {
     tokenAddress,
     symbol,
@@ -145,6 +149,8 @@ export async function analyzeTokenHolders(
       minProfitInTopDecile: top10Profits[top10Profits.length - 1] ?? 0,
     },
     pnlDistribution: computePnlDistribution(pnlValues),
+    topProfitWallets,
+    topLossWallets,
   };
 }
 
