@@ -293,101 +293,106 @@ function startHealthServer() {
   const port = parseInt(process.env.PORT ?? "3000", 10);
 
   const server = createServer((req, res) => {
-    if (req.url === "/") {
-      // Load lightweight dashboard version (no dailyMarketCaps) to avoid OOM
-      // Falls back to full report if dashboard file doesn't exist yet (first deploy)
-      const report = status.report
-        || loadJson<DashboardReport>("latest-dashboard.json")
-        || loadJson<DashboardReport>("latest-report.json");
-      const html = renderDashboard(report, {
-        state: status.state,
-        phase: status.phase,
-        progress: status.progress,
-        lastRun: status.lastRun,
-        lastError: status.lastError,
-      });
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(html);
-      return;
-    }
-
-    if (req.url === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          ok: true,
+    try {
+      if (req.url === "/") {
+        // Load lightweight dashboard version (no dailyMarketCaps) to avoid OOM
+        const report = status.report
+          || loadJson<DashboardReport>("latest-dashboard.json");
+        const html = renderDashboard(report, {
           state: status.state,
           phase: status.phase,
           progress: status.progress,
           lastRun: status.lastRun,
           lastError: status.lastError,
-        })
-      );
-      return;
-    }
-
-    if (req.url === "/report/summary") {
-      const summaryReport = status.report
-        || loadJson<DashboardReport>("latest-dashboard.json")
-        || loadJson<DashboardReport>("latest-report.json");
-      if (summaryReport) {
-        const { tokenDetails, ...summary } = summaryReport;
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify(summary, null, 2));
-      } else {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "No report available yet" }));
-      }
-      return;
-    }
-
-    if (req.url === "/report") {
-      // Stream the report file from disk to avoid OOM on large reports
-      const reportPath = getFilePath("latest-report.json");
-      if (existsSync(reportPath)) {
-        stat(reportPath).then((s) => {
-          res.writeHead(200, {
-            "Content-Type": "application/json",
-            "Content-Length": s.size,
-          });
-          createReadStream(reportPath).pipe(res);
-        }).catch(() => {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Failed to read report file" }));
         });
-      } else {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "No report available yet" }));
-      }
-      return;
-    }
-
-    if (req.url === "/run" && req.method === "POST") {
-      if (status.state === "running") {
-        res.writeHead(409, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: "Analysis already running", phase: status.phase }));
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(html);
         return;
       }
-      res.writeHead(202, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ message: "Analysis started" }));
-      runAnalysis().catch((err) => {
-        status.state = "error";
-        status.lastError = String(err);
-        console.error("Analysis failed:", err);
-      });
-      return;
-    }
 
-    if (req.url === "/clear-cache" && req.method === "POST") {
-      const deleted = clearAllCache();
-      status.report = null;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ message: "Cache cleared", filesDeleted: deleted.length, files: deleted }));
-      return;
-    }
+      if (req.url === "/health") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            ok: true,
+            state: status.state,
+            phase: status.phase,
+            progress: status.progress,
+            lastRun: status.lastRun,
+            lastError: status.lastError,
+          })
+        );
+        return;
+      }
 
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Not found" }));
+      if (req.url === "/report/summary") {
+        const summaryReport = status.report
+          || loadJson<DashboardReport>("latest-dashboard.json");
+        if (summaryReport) {
+          const { tokenDetails, ...summary } = summaryReport;
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(summary, null, 2));
+        } else {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No report available yet" }));
+        }
+        return;
+      }
+
+      if (req.url === "/report") {
+        // Stream the report file from disk to avoid OOM on large reports
+        const reportPath = getFilePath("latest-report.json");
+        if (existsSync(reportPath)) {
+          stat(reportPath).then((s) => {
+            res.writeHead(200, {
+              "Content-Type": "application/json",
+              "Content-Length": s.size,
+            });
+            createReadStream(reportPath).pipe(res);
+          }).catch(() => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to read report file" }));
+          });
+        } else {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No report available yet" }));
+        }
+        return;
+      }
+
+      if (req.url === "/run" && req.method === "POST") {
+        if (status.state === "running") {
+          res.writeHead(409, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Analysis already running", phase: status.phase }));
+          return;
+        }
+        res.writeHead(202, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Analysis started" }));
+        runAnalysis().catch((err) => {
+          status.state = "error";
+          status.lastError = String(err);
+          console.error("Analysis failed:", err);
+        });
+        return;
+      }
+
+      if (req.url === "/clear-cache" && req.method === "POST") {
+        const deleted = clearAllCache();
+        status.report = null;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ message: "Cache cleared", filesDeleted: deleted.length, files: deleted }));
+        return;
+      }
+
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Not found" }));
+    } catch (err) {
+      console.error(`[http] Error handling ${req.url}:`, err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`<h1>Internal Server Error</h1><pre>${String(err)}</pre>`);
+      }
+    }
   });
 
   server.listen(port, () => {
