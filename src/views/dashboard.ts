@@ -1,16 +1,18 @@
 import type { AggregateReport, DashboardReport } from "../types/index.js";
 
-function fmtUsd(v: number | null | undefined): string {
-  if (v == null || isNaN(v)) return "—";
-  if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
-  if (Math.abs(v) >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (Math.abs(v) >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-  return `$${v.toFixed(0)}`;
+function fmtUsd(v: unknown): string {
+  const n = Number(v);
+  if (v == null || isNaN(n)) return "—";
+  if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
+  return `$${n.toFixed(0)}`;
 }
 
-function fmtPct(v: number | null | undefined): string {
-  if (v == null || isNaN(v)) return "—";
-  return `${v.toFixed(1)}%`;
+function fmtPct(v: unknown): string {
+  const n = Number(v);
+  if (v == null || isNaN(n)) return "—";
+  return `${n.toFixed(1)}%`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -23,9 +25,10 @@ function fmtDate(iso: string | null | undefined): string {
   });
 }
 
-function fmtNum(v: number | null | undefined): string {
-  if (v == null || isNaN(v)) return "—";
-  return v.toLocaleString("en-US");
+function fmtNum(v: unknown): string {
+  const n = Number(v);
+  if (v == null || isNaN(n)) return "—";
+  return n.toLocaleString("en-US");
 }
 
 interface StatusInfo {
