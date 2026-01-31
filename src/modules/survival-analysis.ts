@@ -3,6 +3,9 @@
  *
  * Determines whether tokens "survive" at 30, 90, and 365 day checkpoints.
  * Survival = liquidity pool > $100,000 at the checkpoint date.
+ *
+ * Uses getDetailedPairStats with timestamp (Int) to look up historical
+ * liquidity at specific dates, plus current liquidity from pair listing.
  */
 
 import type { GraphQLClient } from "graphql-request";
@@ -30,15 +33,20 @@ interface PairListResponse {
 
 interface DetailedPairStatsResponse {
   getDetailedPairStats: {
-    stats_day1: Array<{
+    stats_day1?: {
       statsUsd: {
-        volume: { currentValue: number };
-        liquidity: { currentValue: number };
-        buyers: { currentValue: number };
-        sellers: { currentValue: number };
+        liquidity: { currentValue: string | null; buckets: string[] };
       };
-      timestamp: number;
-    }>;
+      start: number;
+      end: number;
+    };
+    stats_day30?: {
+      statsUsd: {
+        liquidity: { currentValue: string | null; buckets: string[] };
+      };
+      start: number;
+      end: number;
+    };
   };
 }
 
@@ -71,6 +79,9 @@ async function getCurrentLiquidity(
   };
 }
 
+/**
+ * Get liquidity at a specific historical timestamp.
+ */
 async function getLiquidityAtDate(
   client: GraphQLClient,
   pairAddress: string,
@@ -86,17 +97,22 @@ async function getLiquidityAtDate(
         networkId,
         tokenOfInterest: "token0",
         statsType: "UNFILTERED",
-        timestamp: {
-          current: targetTimestamp,
-          previous: targetTimestamp - SECONDS_PER_DAY,
-        },
+        timestamp: targetTimestamp,
+        bucketCount: 1,
       }
     );
 
-    const stats = data.getDetailedPairStats?.stats_day1;
-    if (stats && stats.length > 0) {
-      return stats[0].statsUsd.liquidity.currentValue;
+    // Try day1 stats first, then day30
+    const day1Liq = data.getDetailedPairStats?.stats_day1?.statsUsd?.liquidity;
+    if (day1Liq?.currentValue) {
+      return parseFloat(day1Liq.currentValue);
     }
+
+    const day30Liq = data.getDetailedPairStats?.stats_day30?.statsUsd?.liquidity;
+    if (day30Liq?.currentValue) {
+      return parseFloat(day30Liq.currentValue);
+    }
+
     return null;
   } catch {
     return null;
@@ -135,6 +151,15 @@ export async function analyzeSurvival(
   const firstCrossTs = trajectory.firstCrossTimestamp;
   const now = toUnixSeconds(new Date());
 
+  // Get liquidity at discovery
+  const discoveryLiquidity = await getLiquidityAtDate(
+    client,
+    primaryPair,
+    token.networkId,
+    firstCrossTs
+  );
+  result.liquidityAtDiscovery = discoveryLiquidity ?? 0;
+
   const checkpoints = [
     { key: "days30" as const, days: 30 },
     { key: "days90" as const, days: 90 },
@@ -163,20 +188,9 @@ export async function analyzeSurvival(
     }
   }
 
-  const discoveryLiquidity = await getLiquidityAtDate(
-    client,
-    primaryPair,
-    token.networkId,
-    firstCrossTs
-  );
-  result.liquidityAtDiscovery = discoveryLiquidity ?? 0;
-
   return result;
 }
 
-/**
- * Batch survival analysis for multiple tokens with progress tracking.
- */
 export async function analyzeAllSurvivals(
   client: GraphQLClient,
   tokens: TokenInfo[],
@@ -202,9 +216,11 @@ export async function analyzeAllSurvivals(
       const alive30 = survival.checkpoints.days30?.alive ?? "N/A";
       const alive90 = survival.checkpoints.days90?.alive ?? "N/A";
       const alive365 = survival.checkpoints.days365?.alive ?? "N/A";
+      const liqStr = survival.currentLiquidity >= 1e6
+        ? `$${(survival.currentLiquidity / 1e6).toFixed(1)}M`
+        : `$${(survival.currentLiquidity / 1e3).toFixed(0)}K`;
       console.log(
-        `  [survival] ${token.symbol}: current_liq=$${(survival.currentLiquidity / 1e3).toFixed(0)}K ` +
-          `30d=${alive30} 90d=${alive90} 365d=${alive365}`
+        `  [survival] ${token.symbol}: liq=${liqStr} 30d=${alive30} 90d=${alive90} 365d=${alive365}`
       );
       onProgress?.(survival, i, tokens.length);
     } catch (err) {

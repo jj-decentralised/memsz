@@ -40,11 +40,11 @@ export function renderDashboard(
   const h = report?.holderSummary;
   const sv = report?.survivalRates;
 
-  // Top tokens by peak market cap
-  const topTokens = report?.tokenDetails
+  // All qualified tokens sorted by peak market cap
+  const allTokens = report?.tokenDetails
     ?.filter((t) => t.trajectory?.reachedThreshold)
     .sort((a, b) => (b.trajectory?.peakMarketCap ?? 0) - (a.trajectory?.peakMarketCap ?? 0))
-    .slice(0, 25) ?? [];
+    ?? [];
 
   // Survival funnel data
   const funnelData = sv
@@ -539,52 +539,139 @@ export function renderDashboard(
       </div>
     </div>
 
-    <!-- ═══ TOP TOKENS TABLE ═══ -->
-    <div class="section">
-      <div class="section-header">Top 25 Tokens by Peak Market Cap</div>
-      <div class="section-deck">
-        Ranked by the highest market capitalization achieved at any point since March 2024. Survival status reflects current liquidity pool depth.
+    <!-- ═══ ALL TOKENS TABLE ═══ -->
+    <div class="section" style="padding-bottom:0;border-bottom:none">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px">
+        <div>
+          <div class="section-header">All ${allTokens.length} Tokens That Reached $10M</div>
+          <div class="section-deck" style="margin-bottom:12px">
+            Every Solana token that hit $10M market cap since March 2024. Click column headers to sort.
+          </div>
+        </div>
+        <input id="token-search" type="text" placeholder="Search tokens..."
+          style="padding:6px 12px;border:1px solid var(--rule);font-size:13px;font-family:var(--font-sans);width:220px;background:var(--bg-card)" />
       </div>
-      <table class="data-table">
+      <div style="overflow-x:auto">
+      <table class="data-table" id="token-table">
         <thead>
           <tr>
-            <th>#</th>
-            <th>Token</th>
-            <th class="num">Peak Mcap</th>
-            <th class="num">Current Mcap</th>
-            <th class="num">Days &gt;$10M</th>
-            <th class="num">Holders in Profit</th>
-            <th class="num">Top 10% Avg</th>
-            <th class="num">Current Liq.</th>
-            <th>Status</th>
+            <th data-sort="index">#</th>
+            <th data-sort="symbol">Token</th>
+            <th class="num" data-sort="peakMcap">Peak Mcap</th>
+            <th class="num" data-sort="currentMcap">Current Mcap</th>
+            <th class="num" data-sort="daysAbove">Days &gt;$10M</th>
+            <th class="num" data-sort="profitPct">% in Profit</th>
+            <th class="num" data-sort="top10Avg">Top 10% Avg</th>
+            <th class="num" data-sort="liq">Current Liq.</th>
+            <th class="num" data-sort="surv30">30d</th>
+            <th class="num" data-sort="surv90">90d</th>
+            <th class="num" data-sort="surv365">365d</th>
+            <th data-sort="status">Status</th>
           </tr>
         </thead>
         <tbody>
-          ${topTokens.map((t, i) => {
-            const prof = t.holders
-              ? fmtPct(t.holders.profitPercentage)
-              : "—";
-            const top10 = t.holders
-              ? fmtUsd(t.holders.top10PercentStats.averageProfit)
-              : "—";
+          ${allTokens.map((t, i) => {
+            const prof = t.holders ? t.holders.profitPercentage : -1;
+            const top10 = t.holders ? t.holders.top10PercentStats.averageProfit : 0;
             const alive = t.survival?.currentlyAlive ?? false;
+            const s30 = t.survival?.checkpoints?.days30;
+            const s90 = t.survival?.checkpoints?.days90;
+            const s365 = t.survival?.checkpoints?.days365;
+            const peakMcap = t.trajectory?.peakMarketCap ?? 0;
+            const currentMcap = t.trajectory?.currentMarketCap ?? 0;
+            const daysAbove = t.trajectory?.daysAboveThreshold ?? 0;
+            const liq = t.survival?.currentLiquidity ?? 0;
             return `
-              <tr>
+              <tr data-symbol="${t.symbol.toLowerCase()}"
+                  data-peak="${peakMcap}" data-current="${currentMcap}"
+                  data-days="${daysAbove}" data-prof="${prof}"
+                  data-top10="${top10}" data-liq="${liq}"
+                  data-s30="${s30 ? (s30.alive ? 1 : 0) : -1}"
+                  data-s90="${s90 ? (s90.alive ? 1 : 0) : -1}"
+                  data-s365="${s365 ? (s365.alive ? 1 : 0) : -1}"
+                  data-alive="${alive ? 1 : 0}">
                 <td style="color:var(--ink-tertiary)">${i + 1}</td>
                 <td class="symbol">${t.symbol}</td>
-                <td class="num">${fmtUsd(t.trajectory?.peakMarketCap ?? 0)}</td>
-                <td class="num">${fmtUsd(t.trajectory?.currentMarketCap ?? 0)}</td>
-                <td class="num">${t.trajectory?.daysAboveThreshold ?? 0}</td>
-                <td class="num">${prof}</td>
-                <td class="num">${top10}</td>
-                <td class="num">${t.survival ? fmtUsd(t.survival.currentLiquidity) : "—"}</td>
+                <td class="num">${fmtUsd(peakMcap)}</td>
+                <td class="num">${fmtUsd(currentMcap)}</td>
+                <td class="num">${daysAbove}</td>
+                <td class="num">${prof >= 0 ? fmtPct(prof) : "—"}</td>
+                <td class="num">${t.holders ? fmtUsd(top10) : "—"}</td>
+                <td class="num">${fmtUsd(liq)}</td>
+                <td class="num">${s30 ? `<span class="tag ${s30.alive ? "alive" : "dead"}">${s30.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
+                <td class="num">${s90 ? `<span class="tag ${s90.alive ? "alive" : "dead"}">${s90.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
+                <td class="num">${s365 ? `<span class="tag ${s365.alive ? "alive" : "dead"}">${s365.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
                 <td><span class="tag ${alive ? "alive" : "dead"}">${alive ? "Active" : "Dead"}</span></td>
               </tr>
             `;
           }).join("")}
         </tbody>
       </table>
+      </div>
+      <div style="text-align:center;padding:16px;font-size:12px;color:var(--ink-tertiary)">
+        Showing <span id="visible-count">${allTokens.length}</span> of ${allTokens.length} tokens
+      </div>
     </div>
+
+    <script>
+    (function() {
+      const table = document.getElementById('token-table');
+      const tbody = table.querySelector('tbody');
+      const search = document.getElementById('token-search');
+      const countEl = document.getElementById('visible-count');
+      let sortCol = 'peakMcap';
+      let sortDir = -1; // -1 = desc
+
+      // Search
+      search.addEventListener('input', function() {
+        const q = this.value.toLowerCase();
+        let visible = 0;
+        tbody.querySelectorAll('tr').forEach(function(row) {
+          const match = !q || row.getAttribute('data-symbol').includes(q) ||
+            row.querySelector('.symbol').textContent.toLowerCase().includes(q);
+          row.style.display = match ? '' : 'none';
+          if (match) visible++;
+        });
+        countEl.textContent = visible;
+      });
+
+      // Sort
+      table.querySelectorAll('th[data-sort]').forEach(function(th) {
+        th.style.cursor = 'pointer';
+        th.addEventListener('click', function() {
+          const col = this.getAttribute('data-sort');
+          if (sortCol === col) { sortDir *= -1; } else { sortCol = col; sortDir = -1; }
+
+          // Update header indicators
+          table.querySelectorAll('th').forEach(function(h) { h.style.fontWeight = '600'; });
+          this.style.fontWeight = '900';
+
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          rows.sort(function(a, b) {
+            var va, vb;
+            if (col === 'symbol') {
+              va = a.getAttribute('data-symbol'); vb = b.getAttribute('data-symbol');
+              return sortDir * va.localeCompare(vb);
+            }
+            if (col === 'index') {
+              return sortDir * (rows.indexOf(a) - rows.indexOf(b));
+            }
+            var attrMap = {
+              peakMcap: 'data-peak', currentMcap: 'data-current',
+              daysAbove: 'data-days', profitPct: 'data-prof',
+              top10Avg: 'data-top10', liq: 'data-liq',
+              surv30: 'data-s30', surv90: 'data-s90', surv365: 'data-s365',
+              status: 'data-alive'
+            };
+            va = parseFloat(a.getAttribute(attrMap[col]) || '0');
+            vb = parseFloat(b.getAttribute(attrMap[col]) || '0');
+            return sortDir * (va - vb);
+          });
+          rows.forEach(function(r) { tbody.appendChild(r); });
+        });
+      });
+    })();
+    </script>
 
     `}
   </div>

@@ -120,7 +120,8 @@ export const QUERIES = {
       $networkId: Int!
       $tokenOfInterest: TokenOfInterest
       $statsType: TokenPairStatisticsType
-      $timestamp: DetailedPairStatsInput
+      $timestamp: Int
+      $bucketCount: Int
     ) {
       getDetailedPairStats(
         pairAddress: $pairAddress
@@ -128,15 +129,27 @@ export const QUERIES = {
         tokenOfInterest: $tokenOfInterest
         statsType: $statsType
         timestamp: $timestamp
+        bucketCount: $bucketCount
       ) {
         stats_day1 {
           statsUsd {
-            volume { currentValue }
-            liquidity { currentValue }
-            buyers { currentValue }
-            sellers { currentValue }
+            liquidity {
+              currentValue
+              buckets
+            }
           }
-          timestamp
+          start
+          end
+        }
+        stats_day30 {
+          statsUsd {
+            liquidity {
+              currentValue
+              buckets
+            }
+          }
+          start
+          end
         }
       }
     }
