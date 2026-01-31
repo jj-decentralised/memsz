@@ -22,7 +22,7 @@ import { analyzeAllSurvivals } from "./modules/survival-analysis.js";
 import { generateReport } from "./report.js";
 import type { CodexConfig, TokenInfo, AggregateReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
-import { saveJson, loadJson, runFile, getFilePath } from "./utils/store.js";
+import { saveJson, loadJson, runFile, getFilePath, clearAllCache } from "./utils/store.js";
 import { renderDashboard } from "./views/dashboard.js";
 
 // ─── Global state for health check ──────────────────────────────────────
@@ -126,6 +126,15 @@ async function runAnalysis() {
 
   let trajectories = loadJson<any[]>(runFile("trajectories"));
 
+  // Validate cache: if peak market caps look absurd (>$1T for a Solana token), data is bad
+  if (trajectories) {
+    const hasAbsurdMcap = trajectories.some((t: any) => (t.peakMarketCap ?? 0) > 1_000_000_000_000);
+    if (hasAbsurdMcap) {
+      console.log("  [cache] Trajectory cache has absurd market cap values — discarding stale data");
+      trajectories = null;
+    }
+  }
+
   if (!trajectories) {
     trajectories = await analyzeAllTrajectories(client, allTokens, config, (_t, i, total) => {
       status.progress = `${i + 1}/${total}`;
@@ -154,6 +163,15 @@ async function runAnalysis() {
   console.log("\n[Phase 3] Analyzing holder profit/loss...");
 
   let holderAnalyses = loadJson<any[]>(runFile("holders"));
+
+  // Validate cache: if all entries have 0 wallets analyzed, the previous run failed
+  if (holderAnalyses) {
+    const totalWallets = holderAnalyses.reduce((s: number, h: any) => s + (h.totalHoldersAnalyzed ?? 0), 0);
+    if (totalWallets === 0) {
+      console.log("  [cache] Holder cache has 0 wallets — discarding stale data");
+      holderAnalyses = null;
+    }
+  }
 
   if (!holderAnalyses) {
     holderAnalyses = await analyzeAllTokenHolders(
@@ -196,6 +214,17 @@ async function runAnalysis() {
   console.log("\n[Phase 4] Analyzing token survival...");
 
   let survivals = loadJson<any[]>(runFile("survivals"));
+
+  // Validate cache: if no token has any checkpoint data, the previous run failed
+  if (survivals) {
+    const hasAnyCheckpoint = survivals.some((s: any) =>
+      s.checkpoints?.days30 !== null || s.checkpoints?.days90 !== null || s.checkpoints?.days365 !== null || (s.currentLiquidity ?? 0) > 0
+    );
+    if (!hasAnyCheckpoint) {
+      console.log("  [cache] Survival cache has no checkpoint data — discarding stale data");
+      survivals = null;
+    }
+  }
 
   if (!survivals) {
     survivals = await analyzeAllSurvivals(
@@ -341,6 +370,14 @@ function startHealthServer() {
         status.lastError = String(err);
         console.error("Analysis failed:", err);
       });
+      return;
+    }
+
+    if (req.url === "/clear-cache" && req.method === "POST") {
+      const deleted = clearAllCache();
+      status.report = null;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Cache cleared", filesDeleted: deleted.length, files: deleted }));
       return;
     }
 

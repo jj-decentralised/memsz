@@ -71,15 +71,18 @@ async function fetchDailyBars(
   }));
 }
 
+/**
+ * Derive the effective supply multiplier from Codex's own market cap / price.
+ * This is decimal-adjusted (unlike raw on-chain circulatingSupply/totalSupply
+ * which are in smallest units and would inflate market cap by 10^decimals).
+ */
 function getSupplyMultiplier(token: TokenInfo): number {
-  const supply = token.circulatingSupply ?? token.totalSupply;
-  if (!supply) {
-    if (token.priceUsd > 0) {
-      return token.marketCapUsd / token.priceUsd;
-    }
-    return 0;
+  // Codex already computes marketCap = decimal-adjusted supply × price
+  // So marketCap / price gives the correct supply to use with historical prices
+  if (token.priceUsd > 0 && token.marketCapUsd > 0) {
+    return token.marketCapUsd / token.priceUsd;
   }
-  return parseFloat(supply);
+  return 0;
 }
 
 export async function analyzeTrajectory(
