@@ -6,6 +6,7 @@
 
 import type {
   AggregateReport,
+  DashboardReport,
   CodexConfig,
   MarketCapTrajectory,
   SurvivalAnalysis,
@@ -121,4 +122,24 @@ export function generateReport(
   };
 
   return report;
+}
+
+/**
+ * Generate a lightweight report for the dashboard by stripping
+ * dailyMarketCaps arrays (which make up ~90% of the full report size).
+ */
+export function generateDashboardReport(report: AggregateReport): DashboardReport {
+  return {
+    ...report,
+    tokenDetails: report.tokenDetails.map((td) => ({
+      address: td.address,
+      symbol: td.symbol,
+      trajectory: td.trajectory ? (() => {
+        const { dailyMarketCaps, ...rest } = td.trajectory;
+        return rest;
+      })() : td.trajectory,
+      holders: td.holders,
+      survival: td.survival,
+    })),
+  };
 }

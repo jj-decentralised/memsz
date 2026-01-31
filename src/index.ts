@@ -19,8 +19,8 @@ import {
 import { analyzeAllTrajectories } from "./modules/market-cap-trajectory.js";
 import { analyzeAllTokenHolders } from "./modules/holder-analysis.js";
 import { analyzeAllSurvivals } from "./modules/survival-analysis.js";
-import { generateReport } from "./report.js";
-import type { CodexConfig, TokenInfo, AggregateReport } from "./types/index.js";
+import { generateReport, generateDashboardReport } from "./report.js";
+import type { CodexConfig, TokenInfo, DashboardReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
 import { saveJson, loadJson, runFile, getFilePath, clearAllCache } from "./utils/store.js";
 import { renderDashboard } from "./views/dashboard.js";
@@ -33,7 +33,7 @@ let status: {
   progress: string;
   lastRun: string | null;
   lastError: string | null;
-  report: AggregateReport | null;
+  report: DashboardReport | null;
 } = {
   state: "idle",
   phase: "startup",
@@ -269,10 +269,15 @@ async function runAnalysis() {
   saveJson(runFile("report"), report);
   saveJson("latest-report.json", report);
 
+  // Save a lightweight dashboard version (strips dailyMarketCaps to reduce ~11MB → ~1MB)
+  const dashboardReport = generateDashboardReport(report);
+  saveJson("latest-dashboard.json", dashboardReport);
+
   status.state = "completed";
   status.phase = "done";
   status.lastRun = new Date().toISOString();
-  status.report = report;
+  // Only hold lightweight version in memory to avoid OOM
+  status.report = dashboardReport;
   status.progress = `${qualifiedTrajectories.length} tokens analyzed`;
 
   console.log("\n" + "=".repeat(70));
@@ -289,7 +294,8 @@ function startHealthServer() {
 
   const server = createServer((req, res) => {
     if (req.url === "/") {
-      const report = status.report || loadJson<AggregateReport>("latest-report.json");
+      // Load lightweight dashboard version (no dailyMarketCaps) to avoid OOM
+      const report = status.report || loadJson<DashboardReport>("latest-dashboard.json");
       const html = renderDashboard(report, {
         state: status.state,
         phase: status.phase,
@@ -318,20 +324,14 @@ function startHealthServer() {
     }
 
     if (req.url === "/report/summary") {
-      if (status.report) {
-        const { tokenDetails, ...summary } = status.report;
+      const report = status.report || loadJson<DashboardReport>("latest-dashboard.json");
+      if (report) {
+        const { tokenDetails, ...summary } = report;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(summary, null, 2));
       } else {
-        const cached = loadJson<AggregateReport>("latest-report.json");
-        if (cached) {
-          const { tokenDetails, ...summary } = cached;
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(summary, null, 2));
-        } else {
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "No report available yet" }));
-        }
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "No report available yet" }));
       }
       return;
     }

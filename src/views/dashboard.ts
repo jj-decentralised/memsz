@@ -1,4 +1,4 @@
-import type { AggregateReport } from "../types/index.js";
+import type { AggregateReport, DashboardReport } from "../types/index.js";
 
 function fmtUsd(v: number): string {
   if (Math.abs(v) >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
@@ -33,7 +33,7 @@ interface StatusInfo {
 }
 
 export function renderDashboard(
-  report: AggregateReport | null,
+  report: AggregateReport | DashboardReport | null,
   status: StatusInfo
 ): string {
   const s = report?.summary;

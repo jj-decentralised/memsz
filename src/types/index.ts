@@ -144,6 +144,20 @@ export interface AggregateReport {
   }>;
 }
 
+/**
+ * Lightweight version of AggregateReport for the dashboard.
+ * Strips dailyMarketCaps from trajectories to reduce memory (~11MB → ~1MB).
+ */
+export type DashboardReport = Omit<AggregateReport, "tokenDetails"> & {
+  tokenDetails: Array<{
+    address: string;
+    symbol: string;
+    trajectory: Omit<MarketCapTrajectory, "dailyMarketCaps">;
+    holders: TokenHolderAnalysis | null;
+    survival: SurvivalAnalysis;
+  }>;
+};
+
 export interface CodexConfig {
   apiKey: string;
   endpoint: string;
