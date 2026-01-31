@@ -256,6 +256,7 @@ export function renderTokenProfile(data: TokenProfileData): string {
       </div>
 
       <!-- Aggregate P&L Stats -->
+      ${h.aggregatePnl ? `
       <div class="section-header" style="font-size:16px; margin-top:24px">Aggregate P&L</div>
       <div class="section-deck">Realized and unrealized profit/loss summed across all ${fmtNum(h.totalHoldersAnalyzed)} active wallets.</div>
       <div class="stat-grid">
@@ -292,8 +293,10 @@ export function renderTokenProfile(data: TokenProfileData): string {
           <div class="desc">Total Volume Sold</div>
         </div>
       </div>
+      ` : ""}
 
       <!-- Econometric Stats -->
+      ${h.econometrics ? `
       <div class="section-header" style="font-size:16px; margin-top:24px">Econometric Analysis</div>
       <div class="stat-grid">
         <div class="stat-box">
@@ -333,6 +336,7 @@ export function renderTokenProfile(data: TokenProfileData): string {
           <div class="desc">99th Percentile</div>
         </div>
       </div>
+      ` : ""}
     </div>
 
     <!-- WALLET TABLES -->

@@ -84,16 +84,17 @@ export function generateReport(
     },
     holderSummary: (() => {
       // Compute global aggregate P&L across all tokens
-      const globalRealizedProfit = holderAnalyses.reduce(
+      const withAgg = holderAnalyses.filter((h) => h.aggregatePnl != null);
+      const globalRealizedProfit = withAgg.reduce(
         (s, h) => s + h.aggregatePnl.totalRealizedProfit, 0
       );
-      const globalRealizedLoss = holderAnalyses.reduce(
+      const globalRealizedLoss = withAgg.reduce(
         (s, h) => s + h.aggregatePnl.totalRealizedLoss, 0
       );
-      const globalUnrealizedProfit = holderAnalyses.reduce(
+      const globalUnrealizedProfit = withAgg.reduce(
         (s, h) => s + h.aggregatePnl.totalUnrealizedProfit, 0
       );
-      const globalUnrealizedLoss = holderAnalyses.reduce(
+      const globalUnrealizedLoss = withAgg.reduce(
         (s, h) => s + h.aggregatePnl.totalUnrealizedLoss, 0
       );
       const globalNetPnl = globalRealizedProfit + globalRealizedLoss +
@@ -103,9 +104,10 @@ export function generateReport(
         : globalRealizedProfit > 0 ? Infinity : 0;
 
       // Collect all per-token econometric values to compute global medians/averages
-      const allAvgWins = holderAnalyses.filter((h) => h.econometrics.avgWin > 0).map((h) => h.econometrics.avgWin);
-      const allAvgLosses = holderAnalyses.filter((h) => h.econometrics.avgLoss < 0).map((h) => h.econometrics.avgLoss);
-      const allMedianPnls = holderAnalyses.map((h) => h.econometrics.medianPnl);
+      const withEcon = holderAnalyses.filter((h) => h.econometrics != null);
+      const allAvgWins = withEcon.filter((h) => h.econometrics.avgWin > 0).map((h) => h.econometrics.avgWin);
+      const allAvgLosses = withEcon.filter((h) => h.econometrics.avgLoss < 0).map((h) => h.econometrics.avgLoss);
+      const allMedianPnls = withEcon.map((h) => h.econometrics.medianPnl);
 
       return {
         totalHoldersAnalyzed: totalHolders,
