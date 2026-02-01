@@ -206,23 +206,26 @@ export async function discoverAllCandidates(
   // A token that hit $10M would almost always retain at least 50 holders
   // or some residual liquidity/mcap.
 
+  // Thresholds chosen so each month stays under Codex 10K offset cap.
+  // A token that reached $10M mcap will almost certainly still have
+  // 200+ holders, $1K+ liquidity, or $5K+ market cap even after crashing.
   const monthlySweepConfigs = [
     {
-      label: "holders >= 50",
+      label: "holders >= 200",
       filterKey: "holders",
-      filterValue: { gte: 50 },
+      filterValue: { gte: 200 },
       rankAttr: "holders",
     },
     {
-      label: "liquidity >= $1",
+      label: "liquidity >= $1K",
       filterKey: "liquidity",
-      filterValue: { gte: 1 },
+      filterValue: { gte: 1_000 },
       rankAttr: "liquidity",
     },
     {
-      label: "marketCap >= $100",
+      label: "marketCap >= $5K",
       filterKey: "marketCap",
-      filterValue: { gte: 100 },
+      filterValue: { gte: 5_000 },
       rankAttr: "marketCap",
     },
   ];

@@ -78,6 +78,12 @@ export async function paginateAll<T>(
       break;
     }
     offset += pageSize;
+
+    // Codex API hard limit: offset + limit <= 10,000
+    if (offset + pageSize > 10_000) {
+      console.log(`    [paginate] hit Codex 10K offset cap at ${all.length} items`);
+      break;
+    }
   }
 
   return all;
