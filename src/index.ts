@@ -47,6 +47,8 @@ import {
   loadManifest,
   createBackupSnapshot,
   listBackups,
+  loadVersionStamp,
+  saveVersionStamp,
 } from "./utils/store.js";
 import { generateTokensCsv, generateWalletsCsv } from "./utils/csv-export.js";
 import { renderDashboard } from "./views/dashboard.js";
@@ -257,8 +259,16 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 4; // v1=3 sweeps, v2=6 sweeps, v3=monthly windowed, v4=fix pagination+USD prices
+  const DISCOVERY_VERSION = 5; // v5=auto-clear on version change
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
+
+  // Auto-clear all cached data when version changes (no manual cache clear needed)
+  const lastVersion = loadVersionStamp();
+  if (lastVersion !== DISCOVERY_VERSION) {
+    console.log(`  [auto-clear] Version changed (${lastVersion ?? "none"} → ${DISCOVERY_VERSION}), clearing all cached data...`);
+    clearAllCache();
+    saveVersionStamp(DISCOVERY_VERSION);
+  }
 
   let allTokens: TokenInfo[];
   const cachedTokens = loadJson<TokenInfo[]>(discoveryCacheKey);

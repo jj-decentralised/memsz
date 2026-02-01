@@ -182,6 +182,31 @@ export interface PhaseManifest {
   status: "in_progress" | "completed";
 }
 
+// ─── Version stamp ───────────────────────────────────────────────────────
+
+const VERSION_STAMP_FILE = ".analysis-version";
+
+/**
+ * Load the last-run version stamp from disk.
+ */
+export function loadVersionStamp(): number | null {
+  const p = filePath(VERSION_STAMP_FILE);
+  if (!existsSync(p)) return null;
+  try {
+    return parseInt(readFileSync(p, "utf-8").trim(), 10);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Save the current version stamp to disk.
+ */
+export function saveVersionStamp(version: number): void {
+  const p = filePath(VERSION_STAMP_FILE);
+  writeFileSync(p, String(version));
+}
+
 // ─── Backup snapshots ────────────────────────────────────────────────────
 
 /**
