@@ -253,14 +253,19 @@ async function runAnalysis() {
   pDiscovery.startedAt = new Date().toISOString();
   status.phase = "Phase 1: Token Discovery";
   status.progress = "starting...";
-  console.log("\n[Phase 1] Discovering all Solana tokens (3 overlapping sweeps)...");
+  console.log("\n[Phase 1] Discovering all Solana tokens (6 overlapping sweeps)...");
+
+  // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
+  // to force a fresh discovery run even if today's cache exists.
+  const DISCOVERY_VERSION = 2; // v1 = 3 sweeps, v2 = 6 sweeps with createdAt
+  const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   let allTokens: TokenInfo[];
-  const cachedTokens = loadJson<TokenInfo[]>(runFile("tokens"));
+  const cachedTokens = loadJson<TokenInfo[]>(discoveryCacheKey);
 
   if (cachedTokens) {
     allTokens = cachedTokens;
-    console.log(`  [cache] Loaded ${allTokens.length} tokens from today's cache`);
+    console.log(`  [cache] Loaded ${allTokens.length} tokens from today's cache (v${DISCOVERY_VERSION})`);
   } else {
     allTokens = await discoverAllCandidates(client, config, (fetched, total) => {
       pDiscovery.total = total;
@@ -268,7 +273,7 @@ async function runAnalysis() {
       status.progress = `${fetched.toLocaleString()}/${total.toLocaleString()} tokens`;
     });
     console.log(`  Total candidate tokens: ${allTokens.length}`);
-    saveJson(runFile("tokens"), allTokens);
+    saveJson(discoveryCacheKey, allTokens);
   }
 
   pDiscovery.total = allTokens.length;
