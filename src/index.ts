@@ -257,7 +257,7 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 2; // v1 = 3 sweeps, v2 = 6 sweeps with createdAt
+  const DISCOVERY_VERSION = 3; // v1 = 3 sweeps, v2 = 6 sweeps, v3 = monthly windowed sweeps
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   let allTokens: TokenInfo[];
