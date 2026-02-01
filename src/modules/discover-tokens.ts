@@ -111,6 +111,25 @@ function splitIntoWeeks(window: TimeWindow): TimeWindow[] {
 }
 
 /**
+ * Split a time window into daily sub-windows.
+ */
+function splitIntoDays(window: TimeWindow): TimeWindow[] {
+  const days: TimeWindow[] = [];
+  const DAY_SECS = 24 * 60 * 60;
+  let start = window.gte;
+
+  while (start < window.lte) {
+    const end = Math.min(start + DAY_SECS - 1, window.lte);
+    const startDate = new Date(start * 1000);
+    const label = `${window.label}/${startDate.toISOString().slice(5, 10)}`;
+    days.push({ gte: start, lte: end, label });
+    start = end + 1;
+  }
+
+  return days;
+}
+
+/**
  * Run a single sweep, fetching all matching tokens via pagination.
  */
 async function runSweep(
@@ -174,11 +193,64 @@ async function runSweep(
 }
 
 /**
+ * Sweep a list of time windows, recursively splitting windows that hit the
+ * 10K offset cap. Splits month→week→day to ensure nothing is lost.
+ */
+async function sweepWindows(
+  client: GraphQLClient,
+  baseFilters: Record<string, unknown>,
+  rankings: SweepConfig["rankings"],
+  label: string,
+  windows: TimeWindow[],
+  seen: Set<string>,
+  allTokens: TokenInfo[],
+  onProgress?: (fetched: number, total: number) => void,
+  indent = "    ",
+): Promise<{ fetched: number; newCount: number }> {
+  let totalFetched = 0;
+  let totalNew = 0;
+
+  for (const win of windows) {
+    const sweep: SweepConfig = {
+      label: `${label} [${win.label}]`,
+      filters: { ...baseFilters, createdAt: { gte: win.gte, lte: win.lte } },
+      rankings,
+    };
+
+    const result = await runSweep(client, sweep, seen, allTokens, onProgress);
+    totalFetched += result.fetched;
+    totalNew += result.newCount;
+
+    if (result.fetched > 0) {
+      console.log(`${indent}[${win.label}] ${result.fetched} fetched, ${result.newCount} new${result.hitCap ? " ⚠ HIT 10K CAP" : ""}`);
+    }
+
+    if (result.hitCap) {
+      // Try weekly split first; if window is already ≤7 days, go to daily
+      const spanDays = (win.lte - win.gte) / 86400;
+      const subWindows = spanDays > 7 ? splitIntoWeeks(win) : splitIntoDays(win);
+      const level = spanDays > 7 ? "weekly" : "daily";
+      console.log(`${indent}[${win.label}] Splitting into ${subWindows.length} ${level} windows...`);
+
+      const sub = await sweepWindows(
+        client, baseFilters, rankings, label, subWindows,
+        seen, allTokens, onProgress, indent + "  ",
+      );
+      totalFetched += sub.fetched;
+      totalNew += sub.newCount;
+    }
+  }
+
+  return { fetched: totalFetched, newCount: totalNew };
+}
+
+/**
  * Discover ALL Solana tokens that could have historically reached $10M.
  *
  * Uses monthly time-window pagination for broad sweeps to work around
  * potential API offset limits. Each month is queried separately, ensuring
  * we capture tokens even if a single query would exceed the offset cap.
+ * Windows that hit the 10K cap are recursively split: month → week → day.
  */
 export async function discoverAllCandidates(
   client: GraphQLClient,
@@ -192,169 +264,50 @@ export async function discoverAllCandidates(
   console.log(`  [discover] Will scan ${months.length} monthly windows (${months[0]?.label} → ${months[months.length - 1]?.label})`);
 
   // ── Tier 1: Global sweeps (no date filter, catches established tokens) ──
-  const globalSweeps: SweepConfig[] = [
+  const globalSweeps: Array<{ label: string; filters: Record<string, unknown>; rankings: SweepConfig["rankings"] }> = [
     {
       label: "liquidity >= $10K",
-      filters: {
-        network: [config.solanaNetworkId],
-        liquidity: { gte: 10_000 },
-      },
+      filters: { network: [config.solanaNetworkId], liquidity: { gte: 10_000 } },
       rankings: { attribute: "liquidity", direction: "DESC" },
     },
     {
       label: "marketCap >= $50K",
-      filters: {
-        network: [config.solanaNetworkId],
-        marketCap: { gte: 50_000 },
-      },
+      filters: { network: [config.solanaNetworkId], marketCap: { gte: 50_000 } },
       rankings: { attribute: "marketCap", direction: "DESC" },
     },
     {
       label: "holders >= 500",
-      filters: {
-        network: [config.solanaNetworkId],
-        holders: { gte: 500 },
-      },
+      filters: { network: [config.solanaNetworkId], holders: { gte: 500 } },
       rankings: { attribute: "holders", direction: "DESC" },
     },
   ];
 
-  for (const sweep of globalSweeps) {
-    console.log(`  [discover] Global sweep: ${sweep.label}`);
-    const { fetched, newCount, hitCap } = await runSweep(client, sweep, seen, allTokens, onProgress);
+  for (const gs of globalSweeps) {
+    console.log(`  [discover] Global sweep: ${gs.label}`);
+    const { fetched, newCount, hitCap } = await runSweep(
+      client, { label: gs.label, filters: gs.filters, rankings: gs.rankings },
+      seen, allTokens, onProgress,
+    );
     console.log(`  [discover]   ${fetched} fetched, ${newCount} new (${allTokens.length} total unique)${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
 
-    // If global sweep hit the 10K cap, re-scan with monthly createdAt windows
     if (hitCap) {
-      console.log(`  [discover]   Falling back to monthly windows for "${sweep.label}"...`);
-      let extraFetched = 0;
-      let extraNew = 0;
-
-      for (const month of months) {
-        const windowedSweep: SweepConfig = {
-          label: `${sweep.label} [${month.label}]`,
-          filters: {
-            ...sweep.filters,
-            createdAt: { gte: month.gte, lte: month.lte },
-          },
-          rankings: sweep.rankings,
-        };
-
-        const monthResult = await runSweep(client, windowedSweep, seen, allTokens, onProgress);
-        extraFetched += monthResult.fetched;
-        extraNew += monthResult.newCount;
-
-        if (monthResult.fetched > 0) {
-          console.log(`    [${month.label}] ${monthResult.fetched} fetched, ${monthResult.newCount} new${monthResult.hitCap ? " ⚠ HIT 10K CAP" : ""}`);
-        }
-
-        // If monthly window also hits cap, split into weeks
-        if (monthResult.hitCap) {
-          const weeks = splitIntoWeeks(month);
-          console.log(`    [${month.label}] Splitting into ${weeks.length} weekly windows...`);
-          for (const week of weeks) {
-            const weekSweep: SweepConfig = {
-              label: `${sweep.label} [${week.label}]`,
-              filters: {
-                ...sweep.filters,
-                createdAt: { gte: week.gte, lte: week.lte },
-              },
-              rankings: sweep.rankings,
-            };
-            const weekResult = await runSweep(client, weekSweep, seen, allTokens, onProgress);
-            extraFetched += weekResult.fetched;
-            extraNew += weekResult.newCount;
-            if (weekResult.fetched > 0) {
-              console.log(`      [${week.label}] ${weekResult.fetched} fetched, ${weekResult.newCount} new${weekResult.hitCap ? " ⚠ HIT CAP" : ""}`);
-            }
-          }
-        }
-      }
-
-      console.log(`  [discover]   Windowed fallback: ${extraFetched} fetched, ${extraNew} new (${allTokens.length} total unique)`);
+      console.log(`  [discover]   Falling back to monthly windows for "${gs.label}"...`);
+      const sub = await sweepWindows(client, gs.filters, gs.rankings, gs.label, months, seen, allTokens, onProgress);
+      console.log(`  [discover]   Windowed fallback: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
     }
   }
 
   // ── Tier 2: Monthly windowed sweeps (catches faded/dead tokens) ──
-  // These use very low thresholds per monthly window to bypass offset limits.
-  // A token that hit $10M would almost always retain at least 50 holders
-  // or some residual liquidity/mcap.
-
-  // Thresholds chosen so each month stays under Codex 10K offset cap.
-  // A token that reached $10M mcap will almost certainly still have
-  // 200+ holders, $1K+ liquidity, or $5K+ market cap even after crashing.
   const monthlySweepConfigs = [
-    {
-      label: "holders >= 200",
-      filterKey: "holders",
-      filterValue: { gte: 200 },
-      rankAttr: "holders",
-    },
-    {
-      label: "liquidity >= $1K",
-      filterKey: "liquidity",
-      filterValue: { gte: 1_000 },
-      rankAttr: "liquidity",
-    },
-    {
-      label: "marketCap >= $5K",
-      filterKey: "marketCap",
-      filterValue: { gte: 5_000 },
-      rankAttr: "marketCap",
-    },
+    { label: "holders >= 200", filters: { network: [config.solanaNetworkId], holders: { gte: 200 } }, rankings: { attribute: "holders", direction: "DESC" } },
+    { label: "liquidity >= $1K", filters: { network: [config.solanaNetworkId], liquidity: { gte: 1_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
+    { label: "marketCap >= $5K", filters: { network: [config.solanaNetworkId], marketCap: { gte: 5_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
   ];
 
-  for (const sweepCfg of monthlySweepConfigs) {
-    console.log(`  [discover] Monthly sweep: ${sweepCfg.label} (${months.length} months)`);
-    let totalFetched = 0;
-    let totalNew = 0;
-
-    for (const month of months) {
-      const sweep: SweepConfig = {
-        label: `${sweepCfg.label} [${month.label}]`,
-        filters: {
-          network: [config.solanaNetworkId],
-          [sweepCfg.filterKey]: sweepCfg.filterValue,
-          createdAt: { gte: month.gte, lte: month.lte },
-        },
-        rankings: { attribute: sweepCfg.rankAttr, direction: "DESC" },
-      };
-
-      const { fetched, newCount, hitCap } = await runSweep(client, sweep, seen, allTokens, onProgress);
-      totalFetched += fetched;
-      totalNew += newCount;
-
-      if (fetched > 0) {
-        console.log(`    [${month.label}] ${fetched} fetched, ${newCount} new${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
-      }
-
-      // If we hit the 10K cap, re-scan this month with weekly sub-windows
-      if (hitCap) {
-        const weeks = splitIntoWeeks(month);
-        console.log(`    [${month.label}] Splitting into ${weeks.length} weekly windows to get remaining tokens...`);
-        for (const week of weeks) {
-          const weekSweep: SweepConfig = {
-            label: `${sweepCfg.label} [${week.label}]`,
-            filters: {
-              network: [config.solanaNetworkId],
-              [sweepCfg.filterKey]: sweepCfg.filterValue,
-              createdAt: { gte: week.gte, lte: week.lte },
-            },
-            rankings: { attribute: sweepCfg.rankAttr, direction: "DESC" },
-          };
-
-          const weekResult = await runSweep(client, weekSweep, seen, allTokens, onProgress);
-          totalFetched += weekResult.fetched;
-          totalNew += weekResult.newCount;
-
-          if (weekResult.fetched > 0) {
-            console.log(`      [${week.label}] ${weekResult.fetched} fetched, ${weekResult.newCount} new${weekResult.hitCap ? " ⚠ HIT CAP" : ""}`);
-          }
-        }
-      }
-    }
-
-    console.log(`  [discover]   Monthly total: ${totalFetched} fetched, ${totalNew} new (${allTokens.length} total unique)`);
+  for (const cfg of monthlySweepConfigs) {
+    console.log(`  [discover] Monthly sweep: ${cfg.label} (${months.length} months)`);
+    const sub = await sweepWindows(client, cfg.filters, cfg.rankings, cfg.label, months, seen, allTokens, onProgress);
+    console.log(`  [discover]   Monthly total: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
   }
 
   console.log(`  [discover] Discovery complete: ${allTokens.length} unique candidate tokens`);
