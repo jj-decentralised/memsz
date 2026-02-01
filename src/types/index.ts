@@ -155,6 +155,7 @@ export interface AggregateReport {
     marketCapThreshold: number;
     liquiditySurvivalThreshold: number;
     network: string;
+    analysisWindowDays: number | null;
   };
   summary: {
     totalTokensAnalyzed: number;
@@ -218,4 +219,6 @@ export interface CodexConfig {
   solanaNetworkId: number;
   marketCapThreshold: number;
   liquiditySurvivalThreshold: number;
+  /** Analysis window in days (e.g. 30 for MVP, 730 for full history). Default: all available. */
+  analysisWindowDays?: number;
 }

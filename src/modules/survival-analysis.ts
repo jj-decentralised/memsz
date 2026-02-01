@@ -163,11 +163,16 @@ export async function analyzeSurvival(
   );
   result.liquidityAtDiscovery = discoveryLiquidity ?? 0;
 
-  const checkpoints = [
+  // Only compute checkpoints that fall within the analysis window
+  const windowDays = config.analysisWindowDays;
+  const allCheckpoints = [
     { key: "days30" as const, days: 30 },
     { key: "days90" as const, days: 90 },
     { key: "days365" as const, days: 365 },
   ];
+  const checkpoints = windowDays
+    ? allCheckpoints.filter((cp) => cp.days <= windowDays)
+    : allCheckpoints;
 
   for (const cp of checkpoints) {
     const checkpointTs = firstCrossTs + cp.days * SECONDS_PER_DAY;

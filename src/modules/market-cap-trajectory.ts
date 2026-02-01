@@ -99,17 +99,21 @@ async function fetchTokenBars(
 }
 
 /**
- * Fetch full hourly history. Since max is 1500 bars per request and
- * we need ~16,800 hours (March 2024 → Feb 2026), we paginate by time window.
+ * Fetch hourly history. Since max is 1500 bars per request and
+ * we may need up to ~16,800 hours (March 2024 → Feb 2026), we paginate by time window.
+ * If analysisWindowDays is set, only fetches the last N days.
  */
 async function fetchFullHourlyBars(
   client: GraphQLClient,
   tokenAddress: string,
   networkId: number,
+  analysisWindowDays?: number,
 ): Promise<OHLCVBar[]> {
   const allBars: OHLCVBar[] = [];
-  const startTs = toUnixSeconds(SOLANA_DATA_START);
   const endTs = toUnixSeconds(new Date());
+  const startTs = analysisWindowDays
+    ? endTs - (analysisWindowDays * 86400)
+    : toUnixSeconds(SOLANA_DATA_START);
   const HOURS_PER_BATCH = 1400; // slightly under 1500 limit for safety
   const BATCH_SECONDS = HOURS_PER_BATCH * 3600;
 
@@ -169,8 +173,11 @@ export async function weeklyPreScreen(
     };
   }
 
+  const windowStart = config.analysisWindowDays
+    ? toUnixSeconds(new Date()) - (config.analysisWindowDays * 86400)
+    : undefined;
   const weeklyBars = await fetchTokenBars(
-    client, token.address, token.networkId, "7D"
+    client, token.address, token.networkId, "7D", windowStart
   );
 
   if (weeklyBars.length === 0) {
@@ -233,9 +240,9 @@ export async function analyzeTrajectoryHourly(
     return result;
   }
 
-  // Fetch full hourly history
+  // Fetch hourly history (respects analysisWindowDays)
   const hourlyBars = await fetchFullHourlyBars(
-    client, token.address, token.networkId
+    client, token.address, token.networkId, config.analysisWindowDays
   );
 
   if (hourlyBars.length === 0) {

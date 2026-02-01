@@ -70,6 +70,9 @@ function loadConfig(): CodexConfig {
       process.env.LIQUIDITY_SURVIVAL_THRESHOLD ?? "100000",
       10
     ),
+    analysisWindowDays: process.env.ANALYSIS_WINDOW_DAYS
+      ? parseInt(process.env.ANALYSIS_WINDOW_DAYS, 10)
+      : undefined,
   };
 }
 
@@ -86,6 +89,7 @@ async function runAnalysis() {
   console.log("SOLANA TOKEN ECOSYSTEM ANALYSIS");
   console.log(`Threshold: ${formatUsd(config.marketCapThreshold)} market cap`);
   console.log(`Survival: >${formatUsd(config.liquiditySurvivalThreshold)} liquidity`);
+  console.log(`Analysis window: ${config.analysisWindowDays ? config.analysisWindowDays + " days" : "all available (March 2024 – present)"}`);
   console.log(`Data available from: March 20, 2024`);
   console.log("=".repeat(70));
 

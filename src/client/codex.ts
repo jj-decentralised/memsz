@@ -169,7 +169,7 @@ export const QUERIES = {
     }
   `,
 
-  FILTER_TOKEN_WALLETS: `
+  FILTER_TOKEN_WALLETS_1Y: `
     query FilterTokenWallets($input: FilterTokenWalletsInput!) {
       filterTokenWallets(input: $input) {
         results {
@@ -186,6 +186,30 @@ export const QUERIES = {
           amountSoldUsd1y
           buys1y
           sells1y
+        }
+        count
+        offset
+      }
+    }
+  `,
+
+  FILTER_TOKEN_WALLETS_30D: `
+    query FilterTokenWallets($input: FilterTokenWalletsInput!) {
+      filterTokenWallets(input: $input) {
+        results {
+          address
+          firstTransactionAt
+          lastTransactionAt
+          tokenBalance
+          tokenBalanceLiveUsd
+          tokenAcquisitionCostUsd
+          purchasedTokenBalance
+          realizedProfitUsd30d
+          realizedProfitPercentage30d
+          amountBoughtUsd30d
+          amountSoldUsd30d
+          buys30d
+          sells30d
         }
         count
         offset

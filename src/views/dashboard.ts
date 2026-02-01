@@ -452,7 +452,7 @@ export function renderDashboard(
     <div class="masthead">
       <h1>Solana Token Ecosystem Analysis</h1>
       <div class="dateline">
-        ${report ? `Data from March 20, 2024 &mdash; ${fmtDate(report.generatedAt)} &bull; Powered by Codex.io` : "Analysis pending"}
+        ${report ? `${report.parameters.analysisWindowDays ? `Last ${report.parameters.analysisWindowDays} days` : "Data from March 20, 2024"} &mdash; ${fmtDate(report.generatedAt)} &bull; Powered by Codex.io` : "Analysis pending"}
       </div>
     </div>
 
@@ -547,7 +547,7 @@ export function renderDashboard(
           <div style="margin-top:20px">
             <div style="font-family:var(--font-serif);font-size:16px;font-weight:700;margin-bottom:4px">Aggregate P&L Across All Tokens</div>
             <div style="font-size:11px;color:var(--ink-tertiary);margin-bottom:12px;line-height:1.4">
-              Realized P&amp;L covers the <strong>last 12 months</strong> of trading activity only (Codex API limitation — no all-time field available).
+              Realized P&amp;L covers the <strong>last ${report?.parameters.analysisWindowDays && report.parameters.analysisWindowDays <= 30 ? "30 days" : "12 months"}</strong> of trading activity (Codex API limitation — no all-time field available).
               Unrealized P&amp;L is all-time (current holdings value minus total cost basis). Discovery uses 3 overlapping sweeps: liquidity &ge;$10K, holders &ge;500, market cap &ge;$50K.
             </div>
             <div class="stat-grid">

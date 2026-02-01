@@ -72,6 +72,7 @@ export function generateReport(
       marketCapThreshold: config.marketCapThreshold,
       liquiditySurvivalThreshold: config.liquiditySurvivalThreshold,
       network: "Solana",
+      analysisWindowDays: config.analysisWindowDays ?? null,
     },
     summary: {
       totalTokensAnalyzed: tokens.length,

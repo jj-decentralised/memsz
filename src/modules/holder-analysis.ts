@@ -10,6 +10,7 @@
  * IMPORTANT: The Codex API returns most numeric fields as String!
  * All values must be parseFloat'd before any arithmetic.
  *
+ * Supports configurable time windows: 30d or 1y (selected via analysisWindowDays).
  * Uses filterTokenWallets to get wallet PnL data for each token.
  * Pulls ALL wallets (no cap) for complete coverage.
  */
@@ -31,12 +32,20 @@ interface TokenWalletResult {
   tokenBalanceLiveUsd: string | null;
   tokenAcquisitionCostUsd: string | null;
   purchasedTokenBalance: string | null;
-  realizedProfitUsd1y: string | null;
-  realizedProfitPercentage1y: string | null;
-  amountBoughtUsd1y: string | null;
-  amountSoldUsd1y: string | null;
-  buys1y: number | null;
-  sells1y: number | null;
+  // 1y fields
+  realizedProfitUsd1y?: string | null;
+  realizedProfitPercentage1y?: string | null;
+  amountBoughtUsd1y?: string | null;
+  amountSoldUsd1y?: string | null;
+  buys1y?: number | null;
+  sells1y?: number | null;
+  // 30d fields
+  realizedProfitUsd30d?: string | null;
+  realizedProfitPercentage30d?: string | null;
+  amountBoughtUsd30d?: string | null;
+  amountSoldUsd30d?: string | null;
+  buys30d?: number | null;
+  sells30d?: number | null;
 }
 
 interface FilterTokenWalletsResponse {
@@ -53,6 +62,44 @@ function num(v: string | number | null | undefined): number {
   return isNaN(n) ? 0 : n;
 }
 
+type TimeSuffix = "30d" | "1y";
+
+/** Pick time-window suffix based on analysisWindowDays */
+function getTimeSuffix(analysisWindowDays?: number): TimeSuffix {
+  if (analysisWindowDays != null && analysisWindowDays <= 30) return "30d";
+  return "1y";
+}
+
+function getWalletQuery(suffix: TimeSuffix): string {
+  return suffix === "30d"
+    ? QUERIES.FILTER_TOKEN_WALLETS_30D
+    : QUERIES.FILTER_TOKEN_WALLETS_1Y;
+}
+
+function getRankingAttribute(suffix: TimeSuffix): string {
+  return suffix === "30d" ? "realizedProfitUsd30d" : "realizedProfitUsd1y";
+}
+
+/** Extract time-windowed fields from a wallet result */
+function extractWindowedFields(r: TokenWalletResult, suffix: TimeSuffix) {
+  if (suffix === "30d") {
+    return {
+      realized: num(r.realizedProfitUsd30d),
+      amountBought: num(r.amountBoughtUsd30d),
+      amountSold: num(r.amountSoldUsd30d),
+      buys: r.buys30d ?? 0,
+      sells: r.sells30d ?? 0,
+    };
+  }
+  return {
+    realized: num(r.realizedProfitUsd1y),
+    amountBought: num(r.amountBoughtUsd1y),
+    amountSold: num(r.amountSoldUsd1y),
+    buys: r.buys1y ?? 0,
+    sells: r.sells1y ?? 0,
+  };
+}
+
 /**
  * Fetch wallet PnL data for a specific token.
  * Pulls ALL wallets — no artificial cap.
@@ -61,18 +108,21 @@ async function fetchTokenWallets(
   client: GraphQLClient,
   tokenAddress: string,
   networkId: number,
+  suffix: TimeSuffix,
 ): Promise<HolderPnL[]> {
   const PAGE_SIZE = 200;
   // Allow up to 500 pages (100K wallets) — effectively unlimited
   const maxPages = 500;
 
   const tokenId = `${tokenAddress}:${networkId}`;
+  const query = getWalletQuery(suffix);
+  const rankAttr = getRankingAttribute(suffix);
 
   const results = await paginateAll<TokenWalletResult>(
     async (offset) => {
       const data = await rateLimitedQuery<FilterTokenWalletsResponse>(
         client,
-        QUERIES.FILTER_TOKEN_WALLETS,
+        query,
         {
           input: {
             tokenIds: [tokenId],
@@ -81,7 +131,7 @@ async function fetchTokenWallets(
             offset,
             rankings: [
               {
-                attribute: "realizedProfitUsd1y",
+                attribute: rankAttr,
                 direction: "DESC",
               },
             ],
@@ -98,27 +148,24 @@ async function fetchTokenWallets(
   );
 
   return results.map((r) => {
-    // All monetary values from Codex are String! — must parseFloat
-    const realized = num(r.realizedProfitUsd1y);
+    const w = extractWindowedFields(r, suffix);
     const holdingValue = num(r.tokenBalanceLiveUsd);
     const costBasis = num(r.tokenAcquisitionCostUsd);
     const unrealized = holdingValue - costBasis;
-    const total = realized + unrealized;
-    const amountBought = num(r.amountBoughtUsd1y);
-    const amountSold = num(r.amountSoldUsd1y);
+    const total = w.realized + unrealized;
 
     return {
       walletAddress: r.address,
       tokenAddress,
-      realizedPnlUsd: realized,
+      realizedPnlUsd: w.realized,
       unrealizedPnlUsd: unrealized,
       totalPnlUsd: total,
       costBasisUsd: costBasis,
       holdingValueUsd: holdingValue,
-      amountBoughtUsd: amountBought,
-      amountSoldUsd: amountSold,
-      buyCount: r.buys1y ?? 0,
-      sellCount: r.sells1y ?? 0,
+      amountBoughtUsd: w.amountBought,
+      amountSoldUsd: w.amountSold,
+      buyCount: w.buys,
+      sellCount: w.sells,
       inProfit: total > 0,
     };
   });
@@ -131,9 +178,11 @@ export async function analyzeTokenHolders(
   client: GraphQLClient,
   tokenAddress: string,
   symbol: string,
-  networkId: number
+  networkId: number,
+  analysisWindowDays?: number,
 ): Promise<TokenHolderAnalysis> {
-  const wallets = await fetchTokenWallets(client, tokenAddress, networkId);
+  const suffix = getTimeSuffix(analysisWindowDays);
+  const wallets = await fetchTokenWallets(client, tokenAddress, networkId, suffix);
 
   // Filter out wallets with zero activity (no buys, no sells, no cost basis, no realized PnL)
   // These are typically airdrop/transfer recipients with no meaningful PnL data
@@ -270,10 +319,12 @@ function computePnlDistribution(
 export async function analyzeAllTokenHolders(
   client: GraphQLClient,
   tokens: Array<{ address: string; symbol: string; networkId: number }>,
-  _config: CodexConfig,
+  config: CodexConfig,
   onProgress?: (analysis: TokenHolderAnalysis, index: number, total: number) => void
 ): Promise<TokenHolderAnalysis[]> {
   const results: TokenHolderAnalysis[] = [];
+  const suffix = getTimeSuffix(config.analysisWindowDays);
+  console.log(`  [holders] Using ${suffix} time window for P&L data`);
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
@@ -283,7 +334,8 @@ export async function analyzeAllTokenHolders(
         client,
         token.address,
         token.symbol,
-        token.networkId
+        token.networkId,
+        config.analysisWindowDays,
       );
       results.push(analysis);
       const agg = analysis.aggregatePnl;
