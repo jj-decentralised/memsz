@@ -3,13 +3,14 @@
  *
  * Finds all Solana tokens that could have historically reached $10M market cap.
  *
- * Strategy:
- * - Single sweep: all Solana tokens with liquidity >= $10K, sorted by market
- *   cap descending. Any token that ever hit $10M would have attracted
- *   liquidity, and even dead tokens typically retain some LP remnants.
- * - Full pagination through ALL matching tokens.
- * - Phase 2 (trajectory analysis) validates which tokens actually crossed
- *   $10M using historical price bars.
+ * Strategy: Three overlapping sweeps to maximize coverage:
+ * 1. liquidity >= $10K — tokens with remaining pool depth
+ * 2. holders >= 500   — distributed tokens (even if liquidity was drained)
+ * 3. marketCap >= $50K — tokens with any remaining value
+ *
+ * All results are unioned and deduplicated by address.
+ * Phase 2 (trajectory analysis) validates which tokens actually crossed
+ * $10M using historical price bars.
  *
  * Limitation: Codex only has Solana data from March 20, 2024 onward.
  */
@@ -44,10 +45,15 @@ interface FilterTokensResponse {
   };
 }
 
+interface SweepConfig {
+  label: string;
+  filters: Record<string, unknown>;
+  rankings: { attribute: string; direction: string };
+}
+
 /**
- * Discover ALL Solana tokens with liquidity >= $10K as candidates
- * for the $10M market cap analysis. Sorted by market cap descending
- * and fully paginated.
+ * Discover ALL Solana tokens that could have historically reached $10M.
+ * Runs three overlapping sweeps to maximize coverage, then deduplicates.
  */
 export async function discoverAllCandidates(
   client: GraphQLClient,
@@ -55,62 +61,91 @@ export async function discoverAllCandidates(
   onProgress?: (fetched: number, total: number) => void,
 ): Promise<TokenInfo[]> {
   const PAGE_SIZE = 200;
-  const MIN_LIQUIDITY = 10_000; // $10K minimum liquidity
 
-  console.log(`  [discover] Fetching all Solana tokens with liquidity >= $${MIN_LIQUIDITY.toLocaleString()}...`);
-
-  // First, get the total count so we can report progress
-  const probe = await rateLimitedQuery<FilterTokensResponse>(
-    client,
-    QUERIES.FILTER_TOKENS,
+  const sweeps: SweepConfig[] = [
     {
+      label: "liquidity >= $10K",
       filters: {
         network: [config.solanaNetworkId],
-        liquidity: { gte: MIN_LIQUIDITY },
+        liquidity: { gte: 10_000 },
       },
       rankings: { attribute: "liquidity", direction: "DESC" },
-      limit: 1,
-      offset: 0,
-    }
-  );
-  const totalCount = probe.filterTokens.count;
-  console.log(`  [discover] Total matching tokens: ${totalCount.toLocaleString()}`);
-
-  const results = await paginateAll<FilterTokenResult>(
-    async (offset) => {
-      const data = await rateLimitedQuery<FilterTokensResponse>(
-        client,
-        QUERIES.FILTER_TOKENS,
-        {
-          filters: {
-            network: [config.solanaNetworkId],
-            liquidity: { gte: MIN_LIQUIDITY },
-          },
-          rankings: { attribute: "liquidity", direction: "DESC" },
-          limit: PAGE_SIZE,
-          offset,
-        }
-      );
-      onProgress?.(Math.min(offset + PAGE_SIZE, totalCount), totalCount);
-      return {
-        results: data.filterTokens.results,
-        count: data.filterTokens.count,
-      };
     },
-    PAGE_SIZE,
-    1000 // up to 200K tokens
-  );
+    {
+      label: "holders >= 500",
+      filters: {
+        network: [config.solanaNetworkId],
+        holders: { gte: 500 },
+      },
+      rankings: { attribute: "holders", direction: "DESC" },
+    },
+    {
+      label: "marketCap >= $50K",
+      filters: {
+        network: [config.solanaNetworkId],
+        marketCap: { gte: 50_000 },
+      },
+      rankings: { attribute: "marketCap", direction: "DESC" },
+    },
+  ];
 
-  // Deduplicate by address (shouldn't be needed with a single query, but safety)
   const seen = new Set<string>();
-  const deduped = results.filter((r) => {
-    if (seen.has(r.token.address)) return false;
-    seen.add(r.token.address);
-    return true;
-  });
+  const allTokens: TokenInfo[] = [];
+  let grandTotal = 0;
 
-  console.log(`  [discover] Found ${deduped.length} candidate tokens`);
-  return deduped.map(mapToTokenInfo);
+  for (const sweep of sweeps) {
+    console.log(`  [discover] Sweep: ${sweep.label}`);
+
+    // Probe for total count
+    const probe = await rateLimitedQuery<FilterTokensResponse>(
+      client,
+      QUERIES.FILTER_TOKENS,
+      {
+        filters: sweep.filters,
+        rankings: sweep.rankings,
+        limit: 1,
+        offset: 0,
+      }
+    );
+    const sweepTotal = probe.filterTokens.count;
+    console.log(`  [discover]   ${sweepTotal.toLocaleString()} matching tokens`);
+    grandTotal += sweepTotal;
+
+    const results = await paginateAll<FilterTokenResult>(
+      async (offset) => {
+        const data = await rateLimitedQuery<FilterTokensResponse>(
+          client,
+          QUERIES.FILTER_TOKENS,
+          {
+            filters: sweep.filters,
+            rankings: sweep.rankings,
+            limit: PAGE_SIZE,
+            offset,
+          }
+        );
+        onProgress?.(allTokens.length + Math.min(offset + PAGE_SIZE, sweepTotal), grandTotal);
+        return {
+          results: data.filterTokens.results,
+          count: data.filterTokens.count,
+        };
+      },
+      PAGE_SIZE,
+      1000 // up to 200K tokens per sweep
+    );
+
+    let newCount = 0;
+    for (const r of results) {
+      if (!seen.has(r.token.address)) {
+        seen.add(r.token.address);
+        allTokens.push(mapToTokenInfo(r));
+        newCount++;
+      }
+    }
+    console.log(`  [discover]   ${results.length} fetched, ${newCount} new (${allTokens.length} total unique)`);
+  }
+
+  console.log(`  [discover] Discovery complete: ${allTokens.length} unique candidate tokens from ${sweeps.length} sweeps`);
+  return allTokens;
 }
 
 function mapToTokenInfo(r: FilterTokenResult): TokenInfo {

@@ -545,7 +545,11 @@ export function renderDashboard(
 
           <!-- Global Aggregate P&L -->
           <div style="margin-top:20px">
-            <div style="font-family:var(--font-serif);font-size:16px;font-weight:700;margin-bottom:12px">Aggregate P&L Across All Tokens</div>
+            <div style="font-family:var(--font-serif);font-size:16px;font-weight:700;margin-bottom:4px">Aggregate P&L Across All Tokens</div>
+            <div style="font-size:11px;color:var(--ink-tertiary);margin-bottom:12px;line-height:1.4">
+              Realized P&amp;L covers the <strong>last 12 months</strong> of trading activity only (Codex API limitation — no all-time field available).
+              Unrealized P&amp;L is all-time (current holdings value minus total cost basis). Discovery uses 3 overlapping sweeps: liquidity &ge;$10K, holders &ge;500, market cap &ge;$50K.
+            </div>
             <div class="stat-grid">
               <div class="stat-box">
                 <div class="val green">${fmtUsd(h?.globalRealizedProfit)}</div>

@@ -23,7 +23,7 @@ async function main() {
 
   const client = createCodexClient(config);
 
-  console.log("Discovering all Solana tokens with liquidity >= $10K...");
+  console.log("Discovering all Solana token candidates (3 sweeps: liquidity, holders, marketCap)...");
   const all = await discoverAllCandidates(client, config);
   console.log(`Found ${all.length} candidate tokens`);
 
