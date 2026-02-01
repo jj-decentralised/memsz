@@ -58,12 +58,17 @@ interface SweepConfig {
   rankings: { attribute: string; direction: string };
 }
 
+interface TimeWindow {
+  gte: number;
+  lte: number;
+  label: string;
+}
+
 /**
  * Generate monthly time windows from Solana data start to now.
- * Returns array of { gte, lte } unix timestamps for each month.
  */
-function generateMonthlyWindows(): Array<{ gte: number; lte: number; label: string }> {
-  const windows: Array<{ gte: number; lte: number; label: string }> = [];
+function generateMonthlyWindows(): TimeWindow[] {
+  const windows: TimeWindow[] = [];
   const start = new Date(SOLANA_DATA_START);
   const now = new Date();
 
@@ -87,6 +92,25 @@ function generateMonthlyWindows(): Array<{ gte: number; lte: number; label: stri
 }
 
 /**
+ * Split a time window into weekly sub-windows.
+ */
+function splitIntoWeeks(window: TimeWindow): TimeWindow[] {
+  const weeks: TimeWindow[] = [];
+  const WEEK_SECS = 7 * 24 * 60 * 60;
+  let start = window.gte;
+
+  while (start < window.lte) {
+    const end = Math.min(start + WEEK_SECS - 1, window.lte);
+    const startDate = new Date(start * 1000);
+    const label = `${window.label}/W${startDate.getDate().toString().padStart(2, "0")}`;
+    weeks.push({ gte: start, lte: end, label });
+    start = end + 1;
+  }
+
+  return weeks;
+}
+
+/**
  * Run a single sweep, fetching all matching tokens via pagination.
  */
 async function runSweep(
@@ -96,7 +120,7 @@ async function runSweep(
   allTokens: TokenInfo[],
   onProgress?: (fetched: number, total: number) => void,
   grandTotal?: number,
-): Promise<{ fetched: number; newCount: number }> {
+): Promise<{ fetched: number; newCount: number; hitCap: boolean }> {
   const PAGE_SIZE = 200;
 
   const probe = await rateLimitedQuery<FilterTokensResponse>(
@@ -112,10 +136,10 @@ async function runSweep(
   const sweepTotal = probe.filterTokens.count;
 
   if (sweepTotal === 0) {
-    return { fetched: 0, newCount: 0 };
+    return { fetched: 0, newCount: 0, hitCap: false };
   }
 
-  const results = await paginateAll<FilterTokenResult>(
+  const { items: results, hitCap } = await paginateAll<FilterTokenResult>(
     async (offset) => {
       const data = await rateLimitedQuery<FilterTokensResponse>(
         client,
@@ -146,7 +170,7 @@ async function runSweep(
     }
   }
 
-  return { fetched: results.length, newCount };
+  return { fetched: results.length, newCount, hitCap };
 }
 
 /**
@@ -246,12 +270,37 @@ export async function discoverAllCandidates(
         rankings: { attribute: sweepCfg.rankAttr, direction: "DESC" },
       };
 
-      const { fetched, newCount } = await runSweep(client, sweep, seen, allTokens, onProgress);
+      const { fetched, newCount, hitCap } = await runSweep(client, sweep, seen, allTokens, onProgress);
       totalFetched += fetched;
       totalNew += newCount;
 
       if (fetched > 0) {
-        console.log(`    [${month.label}] ${fetched} fetched, ${newCount} new`);
+        console.log(`    [${month.label}] ${fetched} fetched, ${newCount} new${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
+      }
+
+      // If we hit the 10K cap, re-scan this month with weekly sub-windows
+      if (hitCap) {
+        const weeks = splitIntoWeeks(month);
+        console.log(`    [${month.label}] Splitting into ${weeks.length} weekly windows to get remaining tokens...`);
+        for (const week of weeks) {
+          const weekSweep: SweepConfig = {
+            label: `${sweepCfg.label} [${week.label}]`,
+            filters: {
+              network: [config.solanaNetworkId],
+              [sweepCfg.filterKey]: sweepCfg.filterValue,
+              createdAt: { gte: week.gte, lte: week.lte },
+            },
+            rankings: { attribute: sweepCfg.rankAttr, direction: "DESC" },
+          };
+
+          const weekResult = await runSweep(client, weekSweep, seen, allTokens, onProgress);
+          totalFetched += weekResult.fetched;
+          totalNew += weekResult.newCount;
+
+          if (weekResult.fetched > 0) {
+            console.log(`      [${week.label}] ${weekResult.fetched} fetched, ${weekResult.newCount} new${weekResult.hitCap ? " ⚠ HIT CAP" : ""}`);
+          }
+        }
       }
     }
 

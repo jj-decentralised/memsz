@@ -147,7 +147,7 @@ async function fetchTokenWallets(
     maxPages
   );
 
-  return results.map((r) => {
+  return results.items.map((r) => {
     const w = extractWindowedFields(r, suffix);
     const holdingValue = num(r.tokenBalanceLiveUsd);
     const costBasis = num(r.tokenAcquisitionCostUsd);
