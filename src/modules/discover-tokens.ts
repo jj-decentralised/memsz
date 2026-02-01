@@ -25,7 +25,9 @@
 import type { GraphQLClient } from "graphql-request";
 import type { CodexConfig, TokenInfo } from "../types/index.js";
 import { QUERIES, rateLimitedQuery } from "../client/codex.js";
-import { paginateAll, toUnixSeconds, SOLANA_DATA_START } from "../utils/helpers.js";
+import { paginateAll, toUnixSeconds, SOLANA_DATA_START, parallelMap } from "../utils/helpers.js";
+
+const DISCOVERY_CONCURRENCY = parseInt(process.env.CONCURRENCY ?? "15", 10);
 
 interface FilterTokenResult {
   token: {
@@ -131,6 +133,7 @@ function splitIntoDays(window: TimeWindow): TimeWindow[] {
 
 /**
  * Run a single sweep, fetching all matching tokens via pagination.
+ * If knownCount is provided, skips the probe call to save an API call.
  */
 async function runSweep(
   client: GraphQLClient,
@@ -139,20 +142,26 @@ async function runSweep(
   allTokens: TokenInfo[],
   onProgress?: (fetched: number, total: number) => void,
   grandTotal?: number,
+  knownCount?: number,
 ): Promise<{ fetched: number; newCount: number; hitCap: boolean }> {
   const PAGE_SIZE = 200;
 
-  const probe = await rateLimitedQuery<FilterTokensResponse>(
-    client,
-    QUERIES.FILTER_TOKENS,
-    {
-      filters: sweep.filters,
-      rankings: [sweep.rankings],
-      limit: 1,
-      offset: 0,
-    }
-  );
-  const sweepTotal = probe.filterTokens.count;
+  let sweepTotal: number;
+  if (knownCount !== undefined) {
+    sweepTotal = knownCount;
+  } else {
+    const probe = await rateLimitedQuery<FilterTokensResponse>(
+      client,
+      QUERIES.FILTER_TOKENS,
+      {
+        filters: sweep.filters,
+        rankings: [sweep.rankings],
+        limit: 1,
+        offset: 0,
+      }
+    );
+    sweepTotal = probe.filterTokens.count;
+  }
 
   if (sweepTotal === 0) {
     return { fetched: 0, newCount: 0, hitCap: false };
@@ -193,8 +202,65 @@ async function runSweep(
 }
 
 /**
- * Sweep a list of time windows, recursively splitting windows that hit the
- * 10K offset cap. Splits month→week→day to ensure nothing is lost.
+ * Process a single time window: probe, decide to split or paginate.
+ * Returns { fetched, newCount } for the window (including any sub-splits).
+ */
+async function processWindow(
+  client: GraphQLClient,
+  baseFilters: Record<string, unknown>,
+  rankings: SweepConfig["rankings"],
+  label: string,
+  win: TimeWindow,
+  seen: Set<string>,
+  allTokens: TokenInfo[],
+  onProgress?: (fetched: number, total: number) => void,
+  indent = "    ",
+): Promise<{ fetched: number; newCount: number }> {
+  const filters = { ...baseFilters, createdAt: { gte: win.gte, lte: win.lte } };
+  const spanDays = (win.lte - win.gte) / 86400;
+
+  // Probe first to check count (1 API call)
+  const probe = await rateLimitedQuery<FilterTokensResponse>(
+    client,
+    QUERIES.FILTER_TOKENS,
+    { filters, rankings: [rankings], limit: 1, offset: 0 },
+  );
+  const count = probe.filterTokens.count;
+
+  if (count === 0) return { fetched: 0, newCount: 0 };
+
+  // If count is near the 10K cap and we can still split, skip pagination
+  // and go straight to sub-windows to avoid wasting API calls
+  if (count >= 9800 && spanDays > 1) {
+    const subWindows = spanDays > 7 ? splitIntoWeeks(win) : splitIntoDays(win);
+    const level = spanDays > 7 ? "weekly" : "daily";
+    console.log(`${indent}[${win.label}] ~${count} tokens, splitting into ${subWindows.length} ${level} windows...`);
+
+    return sweepWindows(
+      client, baseFilters, rankings, label, subWindows,
+      seen, allTokens, onProgress, indent + "  ",
+    );
+  }
+
+  // Count is manageable — paginate normally (pass count to skip double-probe)
+  const sweep: SweepConfig = { label: `${label} [${win.label}]`, filters, rankings };
+  const result = await runSweep(client, sweep, seen, allTokens, onProgress, undefined, count);
+
+  if (result.fetched > 0) {
+    console.log(`${indent}[${win.label}] ${result.fetched} fetched, ${result.newCount} new`);
+  }
+
+  // Safety: if pagination still hit the cap and we're at daily granularity, just accept it
+  if (result.hitCap && spanDays <= 1) {
+    console.log(`${indent}[${win.label}] ⚠ Daily window hit 10K cap, accepting (${result.fetched} items)`);
+  }
+
+  return { fetched: result.fetched, newCount: result.newCount };
+}
+
+/**
+ * Sweep a list of time windows in parallel, recursively splitting windows
+ * that hit the 10K offset cap. Splits month→week→day to ensure nothing is lost.
  */
 async function sweepWindows(
   client: GraphQLClient,
@@ -207,44 +273,17 @@ async function sweepWindows(
   onProgress?: (fetched: number, total: number) => void,
   indent = "    ",
 ): Promise<{ fetched: number; newCount: number }> {
+  const results = await parallelMap(
+    windows,
+    (win) => processWindow(client, baseFilters, rankings, label, win, seen, allTokens, onProgress, indent),
+    DISCOVERY_CONCURRENCY,
+  );
+
   let totalFetched = 0;
   let totalNew = 0;
-
-  for (const win of windows) {
-    const sweep: SweepConfig = {
-      label: `${label} [${win.label}]`,
-      filters: { ...baseFilters, createdAt: { gte: win.gte, lte: win.lte } },
-      rankings,
-    };
-
-    const result = await runSweep(client, sweep, seen, allTokens, onProgress);
-    totalFetched += result.fetched;
-    totalNew += result.newCount;
-
-    if (result.fetched > 0) {
-      console.log(`${indent}[${win.label}] ${result.fetched} fetched, ${result.newCount} new${result.hitCap ? " ⚠ HIT 10K CAP" : ""}`);
-    }
-
-    if (result.hitCap) {
-      const spanDays = (win.lte - win.gte) / 86400;
-
-      // If already at daily granularity (≤1 day), we can't split further — accept the 10K cap
-      if (spanDays <= 1) {
-        console.log(`${indent}[${win.label}] ⚠ Already at daily granularity, accepting 10K cap (${result.fetched} items)`);
-        continue;
-      }
-
-      const subWindows = spanDays > 7 ? splitIntoWeeks(win) : splitIntoDays(win);
-      const level = spanDays > 7 ? "weekly" : "daily";
-      console.log(`${indent}[${win.label}] Splitting into ${subWindows.length} ${level} windows...`);
-
-      const sub = await sweepWindows(
-        client, baseFilters, rankings, label, subWindows,
-        seen, allTokens, onProgress, indent + "  ",
-      );
-      totalFetched += sub.fetched;
-      totalNew += sub.newCount;
-    }
+  for (const r of results) {
+    totalFetched += r.fetched;
+    totalNew += r.newCount;
   }
 
   return { fetched: totalFetched, newCount: totalNew };
@@ -272,8 +311,8 @@ export async function discoverAllCandidates(
   // ── Tier 1: Global sweeps (no date filter, catches established tokens) ──
   const globalSweeps: Array<{ label: string; filters: Record<string, unknown>; rankings: SweepConfig["rankings"] }> = [
     {
-      label: "liquidity >= $10K",
-      filters: { network: [config.solanaNetworkId], liquidity: { gte: 10_000 } },
+      label: "liquidity >= $100K",
+      filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 } },
       rankings: { attribute: "liquidity", direction: "DESC" },
     },
     {
@@ -282,39 +321,43 @@ export async function discoverAllCandidates(
       rankings: { attribute: "marketCap", direction: "DESC" },
     },
     {
-      label: "holders >= 500",
-      filters: { network: [config.solanaNetworkId], holders: { gte: 500 } },
+      label: "holders >= 1000",
+      filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 } },
       rankings: { attribute: "holders", direction: "DESC" },
     },
   ];
 
-  for (const gs of globalSweeps) {
+  // Run all global sweeps in parallel
+  await parallelMap(globalSweeps, async (gs) => {
     console.log(`  [discover] Global sweep: ${gs.label}`);
     const { fetched, newCount, hitCap } = await runSweep(
       client, { label: gs.label, filters: gs.filters, rankings: gs.rankings },
       seen, allTokens, onProgress,
     );
-    console.log(`  [discover]   ${fetched} fetched, ${newCount} new (${allTokens.length} total unique)${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
+    console.log(`  [discover]   ${gs.label}: ${fetched} fetched, ${newCount} new (${allTokens.length} total unique)${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
 
     if (hitCap) {
       console.log(`  [discover]   Falling back to monthly windows for "${gs.label}"...`);
       const sub = await sweepWindows(client, gs.filters, gs.rankings, gs.label, months, seen, allTokens, onProgress);
-      console.log(`  [discover]   Windowed fallback: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
+      console.log(`  [discover]   ${gs.label} windowed: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
     }
-  }
+  }, globalSweeps.length); // All 3 global sweeps at once
 
   // ── Tier 2: Monthly windowed sweeps (catches faded/dead tokens) ──
+  // Raised thresholds: any token that hit $10M mcap will still have
+  // 1000+ holders, $100K+ liquidity, or $50K+ mcap even after crashing.
   const monthlySweepConfigs = [
-    { label: "holders >= 200", filters: { network: [config.solanaNetworkId], holders: { gte: 200 } }, rankings: { attribute: "holders", direction: "DESC" } },
-    { label: "liquidity >= $1K", filters: { network: [config.solanaNetworkId], liquidity: { gte: 1_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
-    { label: "marketCap >= $5K", filters: { network: [config.solanaNetworkId], marketCap: { gte: 5_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
+    { label: "holders >= 1000", filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 } }, rankings: { attribute: "holders", direction: "DESC" } },
+    { label: "liquidity >= $100K", filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
+    { label: "marketCap >= $50K", filters: { network: [config.solanaNetworkId], marketCap: { gte: 50_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
   ];
 
-  for (const cfg of monthlySweepConfigs) {
+  // Run all monthly sweep configs in parallel, each scanning all months concurrently
+  await parallelMap(monthlySweepConfigs, async (cfg) => {
     console.log(`  [discover] Monthly sweep: ${cfg.label} (${months.length} months)`);
     const sub = await sweepWindows(client, cfg.filters, cfg.rankings, cfg.label, months, seen, allTokens, onProgress);
-    console.log(`  [discover]   Monthly total: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
-  }
+    console.log(`  [discover]   ${cfg.label} total: ${sub.fetched} fetched, ${sub.newCount} new (${allTokens.length} total unique)`);
+  }, monthlySweepConfigs.length); // All 3 monthly sweeps at once
 
   console.log(`  [discover] Discovery complete: ${allTokens.length} unique candidate tokens`);
   return allTokens;
