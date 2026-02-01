@@ -3,7 +3,10 @@
  *
  * Runs as a Railway service:
  * - HTTP health check on PORT (Railway requirement)
- * - Full analysis pipeline with intermediate persistence
+ * - Full analysis pipeline with per-token incremental persistence
+ * - Detailed progress tracking with ETA
+ * - Periodic backup snapshots to Railway volume
+ * - /progress endpoint for live monitoring
  * - Optional cron-triggered re-runs via CRON_SCHEDULE env var
  */
 
@@ -16,18 +19,124 @@ import { createCodexClient } from "./client/codex.js";
 import {
   discoverAllCandidates,
 } from "./modules/discover-tokens.js";
-import { analyzeAllTrajectories } from "./modules/market-cap-trajectory.js";
-import { analyzeAllTokenHolders } from "./modules/holder-analysis.js";
-import { analyzeAllSurvivals } from "./modules/survival-analysis.js";
+import { analyzeTrajectoryHourly, weeklyPreScreen } from "./modules/market-cap-trajectory.js";
+import { analyzeTokenHolders } from "./modules/holder-analysis.js";
+import { analyzeSurvival } from "./modules/survival-analysis.js";
 import { generateReport, generateDashboardReport } from "./report.js";
-import type { CodexConfig, TokenInfo, DashboardReport, AggregateReport } from "./types/index.js";
+import type {
+  CodexConfig,
+  TokenInfo,
+  DashboardReport,
+  AggregateReport,
+  MarketCapTrajectory,
+  TokenHolderAnalysis,
+  SurvivalAnalysis,
+} from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
-import { saveJson, loadJson, runFile, getFilePath, clearAllCache } from "./utils/store.js";
+import {
+  saveJson,
+  loadJson,
+  runFile,
+  getFilePath,
+  clearAllCache,
+  saveTokenResult,
+  loadTokenResult,
+  getCompletedTokens,
+  loadAllTokenResults,
+  saveManifest,
+  loadManifest,
+  createBackupSnapshot,
+  listBackups,
+} from "./utils/store.js";
 import { generateTokensCsv, generateWalletsCsv } from "./utils/csv-export.js";
 import { renderDashboard } from "./views/dashboard.js";
 import { renderTokenProfile } from "./views/token-profile.js";
 
-// ─── Global state for health check ──────────────────────────────────────
+// ─── Progress Tracking ──────────────────────────────────────────────────
+
+interface PhaseProgress {
+  name: string;
+  status: "pending" | "in_progress" | "completed" | "skipped";
+  total: number;
+  completed: number;
+  skipped: number;
+  errors: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  /** Rolling average ms per item (for ETA) */
+  avgMsPerItem: number;
+  /** Last few item durations for rolling average */
+  recentDurations: number[];
+}
+
+interface RunProgress {
+  runId: string;
+  startedAt: string;
+  currentPhase: string;
+  phases: {
+    discovery: PhaseProgress;
+    weeklyScreen: PhaseProgress;
+    hourlyAnalysis: PhaseProgress;
+    holders: PhaseProgress;
+    survival: PhaseProgress;
+    report: PhaseProgress;
+  };
+  apiCallsEstimate: number;
+  totalTokensDiscovered: number;
+  totalWeeklyPassed: number;
+  totalQualified: number;
+  lastBackupAt: string | null;
+  backupCount: number;
+}
+
+function createPhaseProgress(name: string): PhaseProgress {
+  return {
+    name,
+    status: "pending",
+    total: 0,
+    completed: 0,
+    skipped: 0,
+    errors: 0,
+    startedAt: null,
+    completedAt: null,
+    avgMsPerItem: 0,
+    recentDurations: [],
+  };
+}
+
+function updateEta(phase: PhaseProgress, durationMs: number): void {
+  phase.recentDurations.push(durationMs);
+  // Keep last 20 durations for rolling average
+  if (phase.recentDurations.length > 20) {
+    phase.recentDurations.shift();
+  }
+  phase.avgMsPerItem =
+    phase.recentDurations.reduce((s, d) => s + d, 0) / phase.recentDurations.length;
+}
+
+function formatEta(phase: PhaseProgress): string {
+  const remaining = phase.total - phase.completed - phase.skipped - phase.errors;
+  if (remaining <= 0 || phase.avgMsPerItem <= 0) return "N/A";
+  const etaMs = remaining * phase.avgMsPerItem;
+  const etaMin = etaMs / 60000;
+  if (etaMin < 1) return "<1 min";
+  if (etaMin < 60) return `~${Math.ceil(etaMin)} min`;
+  const hours = Math.floor(etaMin / 60);
+  const mins = Math.ceil(etaMin % 60);
+  return `~${hours}h ${mins}m`;
+}
+
+function formatElapsed(startedAt: string): string {
+  const elapsed = Date.now() - new Date(startedAt).getTime();
+  const min = Math.floor(elapsed / 60000);
+  if (min < 1) return "<1 min";
+  if (min < 60) return `${min} min`;
+  const hours = Math.floor(min / 60);
+  const mins = min % 60;
+  return `${hours}h ${mins}m`;
+}
+
+// ─── Global state ───────────────────────────────────────────────────────
 
 let status: {
   state: "idle" | "running" | "completed" | "error";
@@ -44,6 +153,29 @@ let status: {
   lastError: null,
   report: null,
 };
+
+let runProgress: RunProgress | null = null;
+
+// ─── Backup interval ────────────────────────────────────────────────────
+
+const BACKUP_INTERVAL_MS = 30 * 60 * 1000; // Every 30 minutes
+let lastBackupTime = 0;
+
+function maybeBackup(): void {
+  const now = Date.now();
+  if (now - lastBackupTime >= BACKUP_INTERVAL_MS) {
+    try {
+      createBackupSnapshot();
+      lastBackupTime = now;
+      if (runProgress) {
+        runProgress.lastBackupAt = new Date().toISOString();
+        runProgress.backupCount++;
+      }
+    } catch (err) {
+      console.error("  [backup] Failed to create snapshot:", err);
+    }
+  }
+}
 
 // ─── Config ──────────────────────────────────────────────────────────────
 
@@ -85,6 +217,27 @@ async function runAnalysis() {
   const config = loadConfig();
   const client = createCodexClient(config);
 
+  const runId = new Date().toISOString().split("T")[0];
+  runProgress = {
+    runId,
+    startedAt: new Date().toISOString(),
+    currentPhase: "discovery",
+    phases: {
+      discovery: createPhaseProgress("Token Discovery"),
+      weeklyScreen: createPhaseProgress("Weekly Pre-Screen"),
+      hourlyAnalysis: createPhaseProgress("Hourly Analysis"),
+      holders: createPhaseProgress("Holder P&L Analysis"),
+      survival: createPhaseProgress("Survival Analysis"),
+      report: createPhaseProgress("Report Generation"),
+    },
+    apiCallsEstimate: 0,
+    totalTokensDiscovered: 0,
+    totalWeeklyPassed: 0,
+    totalQualified: 0,
+    lastBackupAt: null,
+    backupCount: 0,
+  };
+
   console.log("=".repeat(70));
   console.log("SOLANA TOKEN ECOSYSTEM ANALYSIS");
   console.log(`Threshold: ${formatUsd(config.marketCapThreshold)} market cap`);
@@ -94,9 +247,13 @@ async function runAnalysis() {
   console.log("=".repeat(70));
 
   // ── Phase 1: Token Discovery ────────────────────────────────────────
+  runProgress.currentPhase = "discovery";
+  const pDiscovery = runProgress.phases.discovery;
+  pDiscovery.status = "in_progress";
+  pDiscovery.startedAt = new Date().toISOString();
   status.phase = "Phase 1: Token Discovery";
   status.progress = "starting...";
-  console.log("\n[Phase 1] Discovering all Solana tokens with liquidity >= $10K...");
+  console.log("\n[Phase 1] Discovering all Solana tokens (3 overlapping sweeps)...");
 
   let allTokens: TokenInfo[];
   const cachedTokens = loadJson<TokenInfo[]>(runFile("tokens"));
@@ -106,157 +263,356 @@ async function runAnalysis() {
     console.log(`  [cache] Loaded ${allTokens.length} tokens from today's cache`);
   } else {
     allTokens = await discoverAllCandidates(client, config, (fetched, total) => {
+      pDiscovery.total = total;
+      pDiscovery.completed = fetched;
       status.progress = `${fetched.toLocaleString()}/${total.toLocaleString()} tokens`;
     });
     console.log(`  Total candidate tokens: ${allTokens.length}`);
     saveJson(runFile("tokens"), allTokens);
   }
 
+  pDiscovery.total = allTokens.length;
+  pDiscovery.completed = allTokens.length;
+  pDiscovery.status = "completed";
+  pDiscovery.completedAt = new Date().toISOString();
+  runProgress.totalTokensDiscovered = allTokens.length;
   status.progress = `${allTokens.length} candidates discovered`;
 
-  // ── Phase 2: Market Cap Trajectory (two-pass: weekly → hourly) ──────
-  status.phase = "Phase 2: Market Cap Trajectories";
+  // ── Phase 2a: Weekly Pre-Screen ───────────────────────────────────
+  runProgress.currentPhase = "weeklyScreen";
+  const pWeekly = runProgress.phases.weeklyScreen;
+  pWeekly.status = "in_progress";
+  pWeekly.startedAt = new Date().toISOString();
+  pWeekly.total = allTokens.length;
+  status.phase = "Phase 2a: Weekly Pre-Screen";
   status.progress = `0/${allTokens.length}`;
-  console.log("\n[Phase 2] Analyzing market cap trajectories (weekly pre-screen → hourly precision)...");
+  console.log(`\n[Phase 2a] Weekly pre-screen for ${allTokens.length} candidates...`);
 
-  let trajectories = loadJson<any[]>(runFile("trajectories"));
+  // Load already-completed weekly screens
+  const weeklyCompleted = getCompletedTokens("weekly");
+  console.log(`  [resume] ${weeklyCompleted.size} tokens already screened from previous run`);
+  pWeekly.completed = weeklyCompleted.size;
 
-  // Validate cache: if peak market caps look absurd (>$1T for a Solana token), data is bad
-  // Also invalidate if missing hoursAboveThreshold (old daily-only data)
-  if (trajectories) {
-    const hasAbsurdMcap = trajectories.some((t: any) => (t.peakMarketCap ?? 0) > 1_000_000_000_000);
-    const hasHourlyData = trajectories.some((t: any) => t.hoursAboveThreshold != null);
-    if (hasAbsurdMcap) {
-      console.log("  [cache] Trajectory cache has absurd market cap values — discarding stale data");
-      trajectories = null;
-    } else if (!hasHourlyData) {
-      console.log("  [cache] Trajectory cache missing hourly data — discarding to re-analyze with hourly bars");
-      trajectories = null;
+  const weeklyPassed: Array<{ token: TokenInfo; estimatedPeakMcap: number }> = [];
+
+  // Re-load previously passed tokens
+  for (const token of allTokens) {
+    if (weeklyCompleted.has(token.address)) {
+      const cached = loadTokenResult<{ passed: boolean; estimatedPeakMcap: number }>("weekly", token.address);
+      if (cached?.passed) {
+        weeklyPassed.push({ token, estimatedPeakMcap: cached.estimatedPeakMcap });
+      }
     }
   }
 
-  if (!trajectories) {
-    trajectories = await analyzeAllTrajectories(client, allTokens, config, (_t, i, total) => {
-      status.progress = `${i + 1}/${total} (hourly pass)`;
-    });
-    saveJson(runFile("trajectories"), trajectories);
-  } else {
-    console.log(`  [cache] Loaded ${trajectories.length} trajectories from today's cache`);
+  // Screen remaining tokens
+  for (let i = 0; i < allTokens.length; i++) {
+    const token = allTokens[i];
+    if (weeklyCompleted.has(token.address)) continue;
+
+    try {
+      const itemStart = Date.now();
+      const result = await weeklyPreScreen(client, token, config);
+      saveTokenResult("weekly", token.address, result);
+
+      if (result.passed) {
+        weeklyPassed.push({ token, estimatedPeakMcap: result.estimatedPeakMcap });
+      }
+
+      pWeekly.completed++;
+      updateEta(pWeekly, Date.now() - itemStart);
+
+      if (pWeekly.completed % 100 === 0 || pWeekly.completed === 1) {
+        const eta = formatEta(pWeekly);
+        console.log(
+          `  [weekly] (${pWeekly.completed}/${pWeekly.total}) ` +
+          `${weeklyPassed.length} passed so far | ETA: ${eta}`
+        );
+        status.progress = `${pWeekly.completed}/${pWeekly.total} screened, ${weeklyPassed.length} passed | ETA: ${eta}`;
+      }
+
+      maybeBackup();
+    } catch (err) {
+      pWeekly.errors++;
+      console.error(`  [weekly] Error screening ${token.symbol}:`, err);
+    }
   }
+
+  pWeekly.status = "completed";
+  pWeekly.completedAt = new Date().toISOString();
+  runProgress.totalWeeklyPassed = weeklyPassed.length;
+
+  console.log(`  [Phase 2a] Complete: ${weeklyPassed.length} of ${allTokens.length} passed weekly pre-screen`);
+
+  // Sort by estimated peak market cap (most promising first)
+  weeklyPassed.sort((a, b) => b.estimatedPeakMcap - a.estimatedPeakMcap);
+
+  // ── Phase 2b: Hourly Precision Analysis ───────────────────────────
+  runProgress.currentPhase = "hourlyAnalysis";
+  const pHourly = runProgress.phases.hourlyAnalysis;
+  pHourly.status = "in_progress";
+  pHourly.startedAt = new Date().toISOString();
+  pHourly.total = weeklyPassed.length;
+  status.phase = "Phase 2b: Hourly Analysis";
+  status.progress = `0/${weeklyPassed.length}`;
+  console.log(`\n[Phase 2b] Hourly analysis for ${weeklyPassed.length} candidates...`);
+
+  // Load already-completed hourly analyses
+  const hourlyCompleted = getCompletedTokens("hourly");
+  console.log(`  [resume] ${hourlyCompleted.size} tokens already analyzed from previous run`);
+
+  const trajectories: MarketCapTrajectory[] = [];
+
+  // Re-load previously completed trajectories
+  for (const { token } of weeklyPassed) {
+    if (hourlyCompleted.has(token.address)) {
+      const cached = loadTokenResult<MarketCapTrajectory>("hourly", token.address);
+      if (cached) {
+        trajectories.push(cached);
+        pHourly.completed++;
+      }
+    }
+  }
+
+  // Analyze remaining tokens
+  for (let i = 0; i < weeklyPassed.length; i++) {
+    const { token, estimatedPeakMcap } = weeklyPassed[i];
+    if (hourlyCompleted.has(token.address)) continue;
+
+    try {
+      const itemStart = Date.now();
+      console.log(
+        `  [hourly] (${pHourly.completed + 1}/${pHourly.total}) ` +
+        `Analyzing ${token.symbol} (est. peak ${formatMcap(estimatedPeakMcap)})...`
+      );
+
+      const trajectory = await analyzeTrajectoryHourly(client, token, config);
+      saveTokenResult("hourly", token.address, trajectory);
+      trajectories.push(trajectory);
+
+      pHourly.completed++;
+      updateEta(pHourly, Date.now() - itemStart);
+
+      console.log(
+        `  [hourly] ${token.symbol}: reached=${trajectory.reachedThreshold}, ` +
+        `peak=${formatMcap(trajectory.peakMarketCap)}, ` +
+        `hours_above=${trajectory.hoursAboveThreshold}, ` +
+        `days_above=${trajectory.daysAboveThreshold} | ` +
+        `ETA: ${formatEta(pHourly)}`
+      );
+
+      status.progress = `${pHourly.completed}/${pHourly.total} | ETA: ${formatEta(pHourly)}`;
+      maybeBackup();
+    } catch (err) {
+      pHourly.errors++;
+      console.error(`  [hourly] Error analyzing ${token.symbol}:`, err);
+    }
+  }
+
+  pHourly.status = "completed";
+  pHourly.completedAt = new Date().toISOString();
+
+  // Also save the full trajectories file for report generation
+  saveJson(runFile("trajectories"), trajectories);
 
   const qualifiedTokens = allTokens.filter((t) => {
-    const traj = trajectories!.find((tr: any) => tr.tokenAddress === t.address);
+    const traj = trajectories.find((tr) => tr.tokenAddress === t.address);
     return traj?.reachedThreshold;
   });
-  const qualifiedTrajectories = trajectories.filter((t: any) => t.reachedThreshold);
+  const qualifiedTrajectories = trajectories.filter((t) => t.reachedThreshold);
+  runProgress.totalQualified = qualifiedTrajectories.length;
 
   console.log(`\n  RESULT: ${qualifiedTrajectories.length} tokens reached ${formatUsd(config.marketCapThreshold)} market cap`);
-  console.log(`  Currently above: ${qualifiedTrajectories.filter((t: any) => t.currentlyAbove).length}`);
-  console.log(`  Avg days above: ${(qualifiedTrajectories.reduce((s: number, t: any) => s + t.daysAboveThreshold, 0) / (qualifiedTrajectories.length || 1)).toFixed(1)}`);
-  console.log(`  Median days above: ${median(qualifiedTrajectories.map((t: any) => t.daysAboveThreshold))}`);
+  console.log(`  Currently above: ${qualifiedTrajectories.filter((t) => t.currentlyAbove).length}`);
+  console.log(`  Avg hours above: ${(qualifiedTrajectories.reduce((s, t) => s + (t.hoursAboveThreshold ?? 0), 0) / (qualifiedTrajectories.length || 1)).toFixed(1)}`);
+  console.log(`  Median days above: ${median(qualifiedTrajectories.map((t) => t.daysAboveThreshold))}`);
 
-  status.progress = `${qualifiedTrajectories.length} qualified tokens`;
+  // Backup after Phase 2 completes
+  createBackupSnapshot();
+  if (runProgress) {
+    runProgress.lastBackupAt = new Date().toISOString();
+    runProgress.backupCount++;
+  }
 
-  // ── Phase 3: Holder Analysis ────────────────────────────────────────
-  status.phase = "Phase 3: Holder Profit/Loss";
+  // ── Phase 3: Holder Analysis (per-token incremental) ──────────────
+  runProgress.currentPhase = "holders";
+  const pHolders = runProgress.phases.holders;
+  pHolders.status = "in_progress";
+  pHolders.startedAt = new Date().toISOString();
+  pHolders.total = qualifiedTokens.length;
+  status.phase = "Phase 3: Holder P&L Analysis";
   status.progress = `0/${qualifiedTokens.length}`;
-  console.log("\n[Phase 3] Analyzing holder profit/loss...");
+  console.log(`\n[Phase 3] Analyzing holder profit/loss for ${qualifiedTokens.length} qualified tokens...`);
 
-  let holderAnalyses = loadJson<any[]>(runFile("holders"));
+  // Load already-completed holder analyses
+  const holdersCompleted = getCompletedTokens("holders");
+  console.log(`  [resume] ${holdersCompleted.size} tokens already analyzed from previous run`);
 
-  // Validate cache: if all entries have 0 wallets analyzed, the previous run failed
-  // Also invalidate if wallet-level data is missing (old format before topProfitWallets)
-  if (holderAnalyses) {
-    const totalWallets = holderAnalyses.reduce((s: number, h: any) => s + (h.totalHoldersAnalyzed ?? 0), 0);
-    const hasWalletData = holderAnalyses.some((h: any) => Array.isArray(h.topProfitWallets) && h.topProfitWallets.length > 0);
-    const hasAggregatePnl = holderAnalyses.some((h: any) => h.aggregatePnl != null);
-    if (totalWallets === 0) {
-      console.log("  [cache] Holder cache has 0 wallets — discarding stale data");
-      holderAnalyses = null;
-    } else if (!hasWalletData) {
-      console.log("  [cache] Holder cache missing wallet-level data — discarding to re-fetch");
-      holderAnalyses = null;
-    } else if (!hasAggregatePnl) {
-      console.log("  [cache] Holder cache missing aggregatePnl — discarding to re-fetch with corrected math");
-      holderAnalyses = null;
+  const holderAnalyses: TokenHolderAnalysis[] = [];
+
+  // Re-load previously completed analyses
+  for (const token of qualifiedTokens) {
+    if (holdersCompleted.has(token.address)) {
+      const cached = loadTokenResult<TokenHolderAnalysis>("holders", token.address);
+      if (cached && cached.aggregatePnl) {
+        holderAnalyses.push(cached);
+        pHolders.completed++;
+      }
     }
   }
 
-  if (!holderAnalyses) {
-    holderAnalyses = await analyzeAllTokenHolders(
-      client,
-      qualifiedTokens.map((t) => ({
-        address: t.address,
-        symbol: t.symbol,
-        networkId: t.networkId,
-      })),
-      config,
-      (_a, i, total) => {
-        status.progress = `${i + 1}/${total}`;
-        // Save incremental progress every 10 tokens
-        if ((i + 1) % 10 === 0) {
-          saveJson(runFile("holders-partial"), holderAnalyses);
-        }
-      }
-    );
-    saveJson(runFile("holders"), holderAnalyses);
-  } else {
-    console.log(`  [cache] Loaded ${holderAnalyses.length} holder analyses from today's cache`);
+  // Analyze remaining tokens
+  for (const token of qualifiedTokens) {
+    if (holdersCompleted.has(token.address)) {
+      // Check if we already loaded it (might have been invalidated)
+      const alreadyLoaded = holderAnalyses.some((h) => h.tokenAddress === token.address);
+      if (alreadyLoaded) continue;
+    }
+
+    try {
+      const itemStart = Date.now();
+      console.log(
+        `  [holders] (${pHolders.completed + 1}/${pHolders.total}) ` +
+        `Analyzing ${token.symbol}...`
+      );
+
+      const analysis = await analyzeTokenHolders(
+        client,
+        token.address,
+        token.symbol,
+        token.networkId,
+        config.analysisWindowDays,
+      );
+
+      saveTokenResult("holders", token.address, analysis);
+      holderAnalyses.push(analysis);
+
+      pHolders.completed++;
+      updateEta(pHolders, Date.now() - itemStart);
+
+      const agg = analysis.aggregatePnl;
+      console.log(
+        `  [holders] ${token.symbol}: ${analysis.totalHoldersAnalyzed} active wallets ` +
+        `(${analysis.profitPercentage.toFixed(1)}% profit) | ` +
+        `realized: ${fmtUsd(agg.netRealized)} | ` +
+        `ETA: ${formatEta(pHolders)}`
+      );
+
+      status.progress = `${pHolders.completed}/${pHolders.total} | ETA: ${formatEta(pHolders)}`;
+      maybeBackup();
+    } catch (err) {
+      pHolders.errors++;
+      console.error(`  [holders] Error analyzing ${token.symbol}:`, err);
+    }
   }
 
-  if (holderAnalyses.length > 0) {
-    const totalHolders = holderAnalyses.reduce((s: number, h: any) => s + h.totalHoldersAnalyzed, 0);
-    const totalInProfit = holderAnalyses.reduce((s: number, h: any) => s + h.holdersInProfit, 0);
-    const avgTop10Profit =
-      holderAnalyses.reduce((s: number, h: any) => s + h.top10PercentStats.averageProfit, 0) /
-      holderAnalyses.length;
+  pHolders.status = "completed";
+  pHolders.completedAt = new Date().toISOString();
 
+  // Save the aggregated holders file
+  saveJson(runFile("holders"), holderAnalyses);
+
+  if (holderAnalyses.length > 0) {
+    const totalHolders = holderAnalyses.reduce((s, h) => s + h.totalHoldersAnalyzed, 0);
+    const totalInProfit = holderAnalyses.reduce((s, h) => s + h.holdersInProfit, 0);
     console.log(`\n  RESULT: ${totalHolders} wallets analyzed across ${holderAnalyses.length} tokens`);
     console.log(`  In profit: ${totalInProfit} (${((totalInProfit / totalHolders) * 100).toFixed(1)}%)`);
     console.log(`  In loss: ${totalHolders - totalInProfit} (${(((totalHolders - totalInProfit) / totalHolders) * 100).toFixed(1)}%)`);
-    console.log(`  Avg top-10% profit: ${formatUsd(avgTop10Profit)}`);
   }
 
-  // ── Phase 4: Survival Analysis ──────────────────────────────────────
+  // Backup after Phase 3 completes
+  createBackupSnapshot();
+  if (runProgress) {
+    runProgress.lastBackupAt = new Date().toISOString();
+    runProgress.backupCount++;
+  }
+
+  // ── Phase 4: Survival Analysis (per-token incremental) ────────────
+  runProgress.currentPhase = "survival";
+  const pSurvival = runProgress.phases.survival;
+  pSurvival.status = "in_progress";
+  pSurvival.startedAt = new Date().toISOString();
+  pSurvival.total = qualifiedTokens.length;
   status.phase = "Phase 4: Survival Analysis";
   status.progress = `0/${qualifiedTokens.length}`;
-  console.log("\n[Phase 4] Analyzing token survival...");
+  console.log(`\n[Phase 4] Analyzing token survival for ${qualifiedTokens.length} qualified tokens...`);
 
-  let survivals = loadJson<any[]>(runFile("survivals"));
+  // Load already-completed survival analyses
+  const survivalCompleted = getCompletedTokens("survival");
+  console.log(`  [resume] ${survivalCompleted.size} tokens already analyzed from previous run`);
 
-  // Validate cache: if no token has any checkpoint data, the previous run failed
-  if (survivals) {
-    const hasAnyCheckpoint = survivals.some((s: any) =>
-      s.checkpoints?.days30 !== null || s.checkpoints?.days90 !== null || s.checkpoints?.days365 !== null || (s.currentLiquidity ?? 0) > 0
-    );
-    if (!hasAnyCheckpoint) {
-      console.log("  [cache] Survival cache has no checkpoint data — discarding stale data");
-      survivals = null;
+  const survivals: SurvivalAnalysis[] = [];
+  const trajectoryMap = new Map(trajectories.map((t) => [t.tokenAddress, t]));
+
+  // Re-load previously completed analyses
+  for (const token of qualifiedTokens) {
+    if (survivalCompleted.has(token.address)) {
+      const cached = loadTokenResult<SurvivalAnalysis>("survival", token.address);
+      if (cached) {
+        survivals.push(cached);
+        pSurvival.completed++;
+      }
     }
   }
 
-  if (!survivals) {
-    survivals = await analyzeAllSurvivals(
-      client,
-      qualifiedTokens,
-      qualifiedTrajectories,
-      config,
-      (_s, i, total) => {
-        status.progress = `${i + 1}/${total}`;
-      }
-    );
-    saveJson(runFile("survivals"), survivals);
-  } else {
-    console.log(`  [cache] Loaded ${survivals.length} survival analyses from today's cache`);
+  // Analyze remaining tokens
+  for (const token of qualifiedTokens) {
+    if (survivalCompleted.has(token.address)) {
+      const alreadyLoaded = survivals.some((s) => s.tokenAddress === token.address);
+      if (alreadyLoaded) continue;
+    }
+
+    const trajectory = trajectoryMap.get(token.address);
+    if (!trajectory) {
+      pSurvival.skipped++;
+      continue;
+    }
+
+    try {
+      const itemStart = Date.now();
+      console.log(
+        `  [survival] (${pSurvival.completed + 1}/${pSurvival.total}) ` +
+        `Analyzing ${token.symbol}...`
+      );
+
+      const survival = await analyzeSurvival(client, token, trajectory, config);
+      saveTokenResult("survival", token.address, survival);
+      survivals.push(survival);
+
+      pSurvival.completed++;
+      updateEta(pSurvival, Date.now() - itemStart);
+
+      const alive30 = survival.checkpoints.days30?.alive ?? "N/A";
+      const alive90 = survival.checkpoints.days90?.alive ?? "N/A";
+      const alive365 = survival.checkpoints.days365?.alive ?? "N/A";
+      const liqStr = survival.currentLiquidity >= 1e6
+        ? `$${(survival.currentLiquidity / 1e6).toFixed(1)}M`
+        : `$${(survival.currentLiquidity / 1e3).toFixed(0)}K`;
+      console.log(
+        `  [survival] ${token.symbol}: liq=${liqStr} 30d=${alive30} 90d=${alive90} 365d=${alive365} | ` +
+        `ETA: ${formatEta(pSurvival)}`
+      );
+
+      status.progress = `${pSurvival.completed}/${pSurvival.total} | ETA: ${formatEta(pSurvival)}`;
+      maybeBackup();
+    } catch (err) {
+      pSurvival.errors++;
+      console.error(`  [survival] Error analyzing ${token.symbol}:`, err);
+    }
   }
 
-  const survival30 = survivals.filter((s: any) => s.checkpoints.days30 !== null);
-  const survival90 = survivals.filter((s: any) => s.checkpoints.days90 !== null);
-  const survival365 = survivals.filter((s: any) => s.checkpoints.days365 !== null);
+  pSurvival.status = "completed";
+  pSurvival.completedAt = new Date().toISOString();
 
-  const alive30 = survival30.filter((s: any) => s.checkpoints.days30?.alive).length;
-  const alive90 = survival90.filter((s: any) => s.checkpoints.days90?.alive).length;
-  const alive365 = survival365.filter((s: any) => s.checkpoints.days365?.alive).length;
+  // Save the aggregated survivals file
+  saveJson(runFile("survivals"), survivals);
+
+  const survival30 = survivals.filter((s) => s.checkpoints.days30 !== null);
+  const survival90 = survivals.filter((s) => s.checkpoints.days90 !== null);
+  const survival365 = survivals.filter((s) => s.checkpoints.days365 !== null);
+  const alive30 = survival30.filter((s) => s.checkpoints.days30?.alive).length;
+  const alive90 = survival90.filter((s) => s.checkpoints.days90?.alive).length;
+  const alive365 = survival365.filter((s) => s.checkpoints.days365?.alive).length;
 
   console.log(`\n  SURVIVAL RATES (liquidity > ${formatUsd(config.liquiditySurvivalThreshold)}):`);
   console.log(`  30 days:  ${alive30}/${survival30.length} (${survival30.length > 0 ? ((alive30 / survival30.length) * 100).toFixed(1) : "N/A"}%)`);
@@ -264,7 +620,12 @@ async function runAnalysis() {
   console.log(`  365 days: ${alive365}/${survival365.length} (${survival365.length > 0 ? ((alive365 / survival365.length) * 100).toFixed(1) : "N/A"}%)`);
 
   // ── Phase 5: Generate Report ────────────────────────────────────────
-  status.phase = "Phase 5: Report";
+  runProgress.currentPhase = "report";
+  const pReport = runProgress.phases.report;
+  pReport.status = "in_progress";
+  pReport.startedAt = new Date().toISOString();
+  pReport.total = 1;
+  status.phase = "Phase 5: Report Generation";
   console.log("\n[Phase 5] Generating report...");
 
   const report = generateReport(
@@ -301,6 +662,17 @@ async function runAnalysis() {
   const walletRows = walletsCsv.split("\n").length - 1;
   console.log(`  [store] Saved wallets.csv (${walletRows} rows, ${(walletsCsv.length / 1024).toFixed(0)} KB)`);
 
+  pReport.completed = 1;
+  pReport.status = "completed";
+  pReport.completedAt = new Date().toISOString();
+
+  // Final backup
+  createBackupSnapshot();
+  if (runProgress) {
+    runProgress.lastBackupAt = new Date().toISOString();
+    runProgress.backupCount++;
+  }
+
   status.state = "completed";
   status.phase = "done";
   status.lastRun = new Date().toISOString();
@@ -310,12 +682,14 @@ async function runAnalysis() {
 
   console.log("\n" + "=".repeat(70));
   console.log("ANALYSIS COMPLETE");
+  console.log(`Total elapsed: ${formatElapsed(runProgress.startedAt)}`);
+  console.log(`Backups created: ${runProgress.backupCount}`);
   console.log("=".repeat(70));
 
   return report;
 }
 
-// ─── HTTP Health Check Server ───────────────────────────────────────────
+// ─── HTTP Server ────────────────────────────────────────────────────────
 
 function startHealthServer() {
   const port = parseInt(process.env.PORT ?? "3000", 10);
@@ -323,7 +697,6 @@ function startHealthServer() {
   const server = createServer((req, res) => {
     try {
       if (req.url === "/") {
-        // Load lightweight dashboard version (no dailyMarketCaps) to avoid OOM
         const report = status.report
           || loadJson<DashboardReport>("latest-dashboard.json");
         const html = renderDashboard(report, {
@@ -347,7 +720,6 @@ function startHealthServer() {
           return;
         }
 
-        // Load individual token profile file (~30KB) instead of full report (~11MB)
         const tokenProfilePath = join(getFilePath("tokens"), `${address}.json`);
         if (existsSync(tokenProfilePath)) {
           const raw = readFileSync(tokenProfilePath, "utf-8");
@@ -365,6 +737,56 @@ function startHealthServer() {
           res.writeHead(404, { "Content-Type": "text/html" });
           res.end(`<h1>Token not found</h1><p>Address: ${address}</p><p><a href="/">Back to dashboard</a></p>`);
         }
+        return;
+      }
+
+      // ── /progress endpoint — live monitoring ──
+      if (req.url === "/progress") {
+        if (!runProgress) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({
+            status: status.state,
+            phase: status.phase,
+            progress: status.progress,
+            lastRun: status.lastRun,
+            message: "No active run. Use POST /run to start.",
+          }, null, 2));
+          return;
+        }
+
+        // Build a clean progress summary with ETAs
+        const phaseSummaries: Record<string, unknown> = {};
+        for (const [key, phase] of Object.entries(runProgress.phases)) {
+          const elapsed = phase.startedAt ? formatElapsed(phase.startedAt) : null;
+          phaseSummaries[key] = {
+            name: phase.name,
+            status: phase.status,
+            progress: `${phase.completed}/${phase.total}`,
+            skipped: phase.skipped,
+            errors: phase.errors,
+            eta: phase.status === "in_progress" ? formatEta(phase) : null,
+            elapsed,
+            avgSecondsPerItem: phase.avgMsPerItem > 0 ? (phase.avgMsPerItem / 1000).toFixed(1) : null,
+          };
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          runId: runProgress.runId,
+          status: status.state,
+          currentPhase: runProgress.currentPhase,
+          elapsed: formatElapsed(runProgress.startedAt),
+          phases: phaseSummaries,
+          totals: {
+            tokensDiscovered: runProgress.totalTokensDiscovered,
+            weeklyPassed: runProgress.totalWeeklyPassed,
+            qualifiedTokens: runProgress.totalQualified,
+          },
+          backups: {
+            count: runProgress.backupCount,
+            lastBackupAt: runProgress.lastBackupAt,
+          },
+        }, null, 2));
         return;
       }
 
@@ -398,7 +820,6 @@ function startHealthServer() {
       }
 
       if (req.url === "/report") {
-        // Stream the report file from disk to avoid OOM on large reports
         const reportPath = getFilePath("latest-report.json");
         if (existsSync(reportPath)) {
           stat(reportPath).then((s) => {
@@ -460,6 +881,13 @@ function startHealthServer() {
         return;
       }
 
+      if (req.url === "/backups") {
+        const backups = listBackups();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ backups }, null, 2));
+        return;
+      }
+
       if (req.url === "/run" && req.method === "POST") {
         if (status.state === "running") {
           res.writeHead(409, { "Content-Type": "application/json" });
@@ -497,11 +925,16 @@ function startHealthServer() {
 
   server.listen(port, () => {
     console.log(`Health server listening on port ${port}`);
-    console.log(`  GET  /health             — service status`);
-    console.log(`  GET  /report             — latest analysis report (JSON)`);
-    console.log(`  GET  /export/tokens.csv  — token-level CSV export`);
-    console.log(`  GET  /export/wallets.csv — wallet-level CSV export`);
-    console.log(`  POST /run                — trigger a new analysis run`);
+    console.log(`  GET  /                    — dashboard`);
+    console.log(`  GET  /progress            — live progress tracking (JSON)`);
+    console.log(`  GET  /health              — service status`);
+    console.log(`  GET  /backups             — list backup snapshots`);
+    console.log(`  GET  /report              — latest analysis report (JSON)`);
+    console.log(`  GET  /report/summary      — summary without token details`);
+    console.log(`  GET  /export/tokens.csv   — token-level CSV export`);
+    console.log(`  GET  /export/wallets.csv  — wallet-level CSV export`);
+    console.log(`  POST /run                 — trigger a new analysis run`);
+    console.log(`  POST /clear-cache         — clear all cached data`);
   });
 }
 
@@ -527,13 +960,28 @@ function scheduleCron() {
   }, intervalMs);
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────────
+
+function formatMcap(value: number): string {
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+  if (value >= 1e3) return `$${(value / 1e3).toFixed(1)}K`;
+  return `$${value.toFixed(0)}`;
+}
+
+function fmtUsd(v: number): string {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "+";
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
 // ─── Main ───────────────────────────────────────────────────────────────
 
 async function main() {
-  // Start the health check server first (Railway needs it)
   startHealthServer();
 
-  // Run the first analysis immediately
   try {
     await runAnalysis();
   } catch (err) {
@@ -542,7 +990,6 @@ async function main() {
     console.error("Initial analysis failed:", err);
   }
 
-  // Schedule recurring runs
   if (process.env.CRON_INTERVAL_HOURS) {
     scheduleCron();
   }
