@@ -67,7 +67,14 @@ export async function paginateAll<T>(
 
     console.log(`    [paginate] page ${page + 1}: got ${results.length} items (${all.length}/${count} total)`);
 
-    if (all.length >= count || results.length < pageSize || results.length === 0) {
+    // Stop if we got fewer results than page size (no more data),
+    // or if we've fetched everything (and count isn't capped at limit).
+    // The Codex API sometimes caps `count` at the limit value, so we
+    // can't trust count alone — keep going if we got a full page.
+    if (results.length < pageSize || results.length === 0) {
+      break;
+    }
+    if (all.length >= count && count > pageSize) {
       break;
     }
     offset += pageSize;
