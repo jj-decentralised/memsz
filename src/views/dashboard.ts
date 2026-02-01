@@ -485,9 +485,9 @@ export function renderDashboard(
         <div class="sub">${fmtNum(h?.totalHoldersAnalyzed)} wallets analyzed</div>
       </div>
       <div class="headline-stat">
-        <div class="number">${s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M).toFixed(0) : "—"}</div>
-        <div class="label">Median Days Above $10M</div>
-        <div class="sub">avg ${s?.averageDaysAbove10M != null ? Number(s.averageDaysAbove10M).toFixed(1) : "—"} days</div>
+        <div class="number">${s?.medianHoursAbove10M != null ? Number(s.medianHoursAbove10M).toFixed(0) : s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M * 24).toFixed(0) : "—"}</div>
+        <div class="label">Median Hours Above $10M</div>
+        <div class="sub">${s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M).toFixed(0) + " days" : "—"} &bull; ${fmtNum(s?.totalCandidatesScanned)} tokens scanned</div>
       </div>
     </div>
 
@@ -609,6 +609,7 @@ export function renderDashboard(
             <th data-sort="symbol">Token</th>
             <th class="num" data-sort="peakMcap">Peak Mcap</th>
             <th class="num" data-sort="currentMcap">Current Mcap</th>
+            <th class="num" data-sort="hoursAbove">Hours &gt;$10M</th>
             <th class="num" data-sort="daysAbove">Days &gt;$10M</th>
             <th class="num" data-sort="profitPct">% in Profit</th>
             <th class="num" data-sort="top10Avg">Top 10% Avg</th>
@@ -630,11 +631,12 @@ export function renderDashboard(
             const peakMcap = t.trajectory?.peakMarketCap ?? 0;
             const currentMcap = t.trajectory?.currentMarketCap ?? 0;
             const daysAbove = t.trajectory?.daysAboveThreshold ?? 0;
+            const hoursAbove = (t.trajectory as any)?.hoursAboveThreshold ?? daysAbove * 24;
             const liq = t.survival?.currentLiquidity ?? 0;
             return `
               <tr data-symbol="${t.symbol.toLowerCase()}"
                   data-peak="${peakMcap}" data-current="${currentMcap}"
-                  data-days="${daysAbove}" data-prof="${prof}"
+                  data-hours="${hoursAbove}" data-days="${daysAbove}" data-prof="${prof}"
                   data-top10="${top10}" data-liq="${liq}"
                   data-s30="${s30 ? (s30.alive ? 1 : 0) : -1}"
                   data-s90="${s90 ? (s90.alive ? 1 : 0) : -1}"
@@ -644,6 +646,7 @@ export function renderDashboard(
                 <td class="symbol"><a href="/token/${t.address}" style="text-decoration:none;color:var(--ink);font-weight:600">${t.symbol}</a></td>
                 <td class="num">${fmtUsd(peakMcap)}</td>
                 <td class="num">${fmtUsd(currentMcap)}</td>
+                <td class="num">${hoursAbove}</td>
                 <td class="num">${daysAbove}</td>
                 <td class="num">${prof >= 0 ? fmtPct(prof) : "—"}</td>
                 <td class="num">${t.holders ? fmtUsd(top10) : "—"}</td>
@@ -708,7 +711,7 @@ export function renderDashboard(
             }
             var attrMap = {
               peakMcap: 'data-peak', currentMcap: 'data-current',
-              daysAbove: 'data-days', profitPct: 'data-prof',
+              hoursAbove: 'data-hours', daysAbove: 'data-days', profitPct: 'data-prof',
               top10Avg: 'data-top10', liq: 'data-liq',
               surv30: 'data-s30', surv90: 'data-s90', surv365: 'data-s365',
               status: 'data-alive'

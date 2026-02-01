@@ -74,8 +74,8 @@ function sleep(ms: number): Promise<void> {
 
 export const QUERIES = {
   FILTER_TOKENS: `
-    query FilterTokens($filters: TokenFilters, $limit: Int, $offset: Int) {
-      filterTokens(filters: $filters, limit: $limit, offset: $offset) {
+    query FilterTokens($filters: TokenFilters, $rankings: TokenRanking, $limit: Int, $offset: Int) {
+      filterTokens(filters: $filters, rankings: $rankings, limit: $limit, offset: $offset) {
         results {
           token {
             address
@@ -103,6 +103,20 @@ export const QUERIES = {
   GET_BARS: `
     query GetBars($symbol: String!, $from: Int!, $to: Int!, $resolution: String!) {
       getBars(symbol: $symbol, from: $from, to: $to, resolution: $resolution) {
+        o
+        h
+        l
+        c
+        v
+        t
+        s
+      }
+    }
+  `,
+
+  GET_TOKEN_BARS: `
+    query GetTokenBars($symbol: String!, $from: Int!, $to: Int!, $resolution: String!, $removeLeadingNullValues: Boolean) {
+      getTokenBars(symbol: $symbol, from: $from, to: $to, resolution: $resolution, removeLeadingNullValues: $removeLeadingNullValues) {
         o
         h
         l

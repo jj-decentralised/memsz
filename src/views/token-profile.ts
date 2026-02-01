@@ -177,6 +177,10 @@ export function renderTokenProfile(data: TokenProfileData): string {
         <div class="desc">Current Market Cap</div>
       </div>
       <div class="stat-box">
+        <div class="val">${(t as any)?.hoursAboveThreshold ?? (t?.daysAboveThreshold != null ? t.daysAboveThreshold * 24 : "—")}</div>
+        <div class="desc">Hours Above $10M</div>
+      </div>
+      <div class="stat-box">
         <div class="val">${t?.daysAboveThreshold ?? "—"}</div>
         <div class="desc">Days Above $10M</div>
       </div>

@@ -36,6 +36,8 @@ export interface MarketCapTrajectory {
   currentlyAbove: boolean;
   /** Total days spent above $10M */
   daysAboveThreshold: number;
+  /** Total hours spent above $10M (from hourly bar analysis) */
+  hoursAboveThreshold?: number;
   /** Peak market cap observed */
   peakMarketCap: number;
   /** Peak timestamp */
@@ -156,10 +158,13 @@ export interface AggregateReport {
   };
   summary: {
     totalTokensAnalyzed: number;
+    totalCandidatesScanned: number;
     tokensReached10M: number;
     tokensCurrentlyAbove10M: number;
     averageDaysAbove10M: number;
     medianDaysAbove10M: number;
+    averageHoursAbove10M: number;
+    medianHoursAbove10M: number;
   };
   holderSummary: {
     totalHoldersAnalyzed: number;

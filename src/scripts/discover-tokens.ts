@@ -4,10 +4,7 @@
  */
 import "dotenv/config";
 import { createCodexClient } from "../client/codex.js";
-import {
-  discoverCurrentTokensAboveThreshold,
-  discoverHistoricalCandidates,
-} from "../modules/discover-tokens.js";
+import { discoverAllCandidates } from "../modules/discover-tokens.js";
 import type { CodexConfig } from "../types/index.js";
 
 async function main() {
@@ -26,21 +23,15 @@ async function main() {
 
   const client = createCodexClient(config);
 
-  console.log("Discovering tokens currently above $10M market cap...");
-  const current = await discoverCurrentTokensAboveThreshold(client, config);
-  console.log(`Found ${current.length} tokens currently above $10M`);
-
-  console.log("\nDiscovering historical candidates...");
-  const candidates = await discoverHistoricalCandidates(client, config);
-  console.log(`Found ${candidates.length} additional candidates`);
+  console.log("Discovering all Solana tokens with liquidity >= $10K...");
+  const all = await discoverAllCandidates(client, config);
+  console.log(`Found ${all.length} candidate tokens`);
 
   // Print top tokens
-  const all = [...current, ...candidates].sort(
-    (a, b) => b.marketCapUsd - a.marketCapUsd
-  );
+  const sorted = all.sort((a, b) => b.marketCapUsd - a.marketCapUsd);
 
   console.log("\nTop tokens by current market cap:");
-  for (const t of all.slice(0, 20)) {
+  for (const t of sorted.slice(0, 20)) {
     console.log(
       `  ${t.symbol.padEnd(12)} mcap=$${(t.marketCapUsd / 1e6).toFixed(1)}M  price=$${t.priceUsd.toFixed(6)}  pair=${t.primaryPairAddress ?? "none"}`
     );

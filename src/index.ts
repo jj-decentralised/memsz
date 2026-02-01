@@ -14,8 +14,7 @@ import { stat } from "fs/promises";
 import { join } from "path";
 import { createCodexClient } from "./client/codex.js";
 import {
-  discoverCurrentTokensAboveThreshold,
-  discoverHistoricalCandidates,
+  discoverAllCandidates,
 } from "./modules/discover-tokens.js";
 import { analyzeAllTrajectories } from "./modules/market-cap-trajectory.js";
 import { analyzeAllTokenHolders } from "./modules/holder-analysis.js";
@@ -92,7 +91,7 @@ async function runAnalysis() {
   // ── Phase 1: Token Discovery ────────────────────────────────────────
   status.phase = "Phase 1: Token Discovery";
   status.progress = "starting...";
-  console.log("\n[Phase 1] Discovering tokens...");
+  console.log("\n[Phase 1] Discovering all Solana tokens with liquidity >= $10K...");
 
   let allTokens: TokenInfo[];
   const cachedTokens = loadJson<TokenInfo[]>(runFile("tokens"));
@@ -101,45 +100,39 @@ async function runAnalysis() {
     allTokens = cachedTokens;
     console.log(`  [cache] Loaded ${allTokens.length} tokens from today's cache`);
   } else {
-    const [currentTokens, historicalCandidates] = await Promise.all([
-      discoverCurrentTokensAboveThreshold(client, config),
-      discoverHistoricalCandidates(client, config),
-    ]);
-
-    const tokenMap = new Map<string, TokenInfo>();
-    for (const t of [...currentTokens, ...historicalCandidates]) {
-      tokenMap.set(t.address, t);
-    }
-    allTokens = Array.from(tokenMap.values());
-
-    console.log(`  Found ${currentTokens.length} tokens currently above ${formatUsd(config.marketCapThreshold)}`);
-    console.log(`  Found ${historicalCandidates.length} additional candidates`);
-    console.log(`  Total unique tokens: ${allTokens.length}`);
-
+    allTokens = await discoverAllCandidates(client, config, (fetched, total) => {
+      status.progress = `${fetched.toLocaleString()}/${total.toLocaleString()} tokens`;
+    });
+    console.log(`  Total candidate tokens: ${allTokens.length}`);
     saveJson(runFile("tokens"), allTokens);
   }
 
-  status.progress = `${allTokens.length} tokens discovered`;
+  status.progress = `${allTokens.length} candidates discovered`;
 
-  // ── Phase 2: Market Cap Trajectory ──────────────────────────────────
+  // ── Phase 2: Market Cap Trajectory (two-pass: weekly → hourly) ──────
   status.phase = "Phase 2: Market Cap Trajectories";
   status.progress = `0/${allTokens.length}`;
-  console.log("\n[Phase 2] Analyzing market cap trajectories...");
+  console.log("\n[Phase 2] Analyzing market cap trajectories (weekly pre-screen → hourly precision)...");
 
   let trajectories = loadJson<any[]>(runFile("trajectories"));
 
   // Validate cache: if peak market caps look absurd (>$1T for a Solana token), data is bad
+  // Also invalidate if missing hoursAboveThreshold (old daily-only data)
   if (trajectories) {
     const hasAbsurdMcap = trajectories.some((t: any) => (t.peakMarketCap ?? 0) > 1_000_000_000_000);
+    const hasHourlyData = trajectories.some((t: any) => t.hoursAboveThreshold != null);
     if (hasAbsurdMcap) {
       console.log("  [cache] Trajectory cache has absurd market cap values — discarding stale data");
+      trajectories = null;
+    } else if (!hasHourlyData) {
+      console.log("  [cache] Trajectory cache missing hourly data — discarding to re-analyze with hourly bars");
       trajectories = null;
     }
   }
 
   if (!trajectories) {
     trajectories = await analyzeAllTrajectories(client, allTokens, config, (_t, i, total) => {
-      status.progress = `${i + 1}/${total}`;
+      status.progress = `${i + 1}/${total} (hourly pass)`;
     });
     saveJson(runFile("trajectories"), trajectories);
   } else {

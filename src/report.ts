@@ -60,8 +60,10 @@ export function generateReport(
   const alive90 = s90.filter((s) => s.checkpoints.days90?.alive).length;
   const alive365 = s365.filter((s) => s.checkpoints.days365?.alive).length;
 
-  // Days above threshold
-  const daysAbove = trajectories.map((t) => t.daysAboveThreshold);
+  // Days/hours above threshold (only for tokens that reached it)
+  const reached = trajectories.filter((t) => t.reachedThreshold);
+  const daysAbove = reached.map((t) => t.daysAboveThreshold);
+  const hoursAbove = reached.map((t) => t.hoursAboveThreshold ?? t.daysAboveThreshold * 24);
 
   const report: AggregateReport = {
     generatedAt: new Date().toISOString(),
@@ -73,7 +75,8 @@ export function generateReport(
     },
     summary: {
       totalTokensAnalyzed: tokens.length,
-      tokensReached10M: trajectories.filter((t) => t.reachedThreshold).length,
+      totalCandidatesScanned: trajectories.length,
+      tokensReached10M: reached.length,
       tokensCurrentlyAbove10M: trajectories.filter((t) => t.currentlyAbove)
         .length,
       averageDaysAbove10M:
@@ -81,6 +84,11 @@ export function generateReport(
           ? daysAbove.reduce((s, v) => s + v, 0) / daysAbove.length
           : 0,
       medianDaysAbove10M: median(daysAbove),
+      averageHoursAbove10M:
+        hoursAbove.length > 0
+          ? hoursAbove.reduce((s, v) => s + v, 0) / hoursAbove.length
+          : 0,
+      medianHoursAbove10M: median(hoursAbove),
     },
     holderSummary: (() => {
       // Compute global aggregate P&L across all tokens
