@@ -32,7 +32,7 @@ import type {
   TokenHolderAnalysis,
   SurvivalAnalysis,
 } from "./types/index.js";
-import { median, formatUsd } from "./utils/helpers.js";
+import { median, formatUsd, parallelMap } from "./utils/helpers.js";
 import {
   saveJson,
   loadJson,
@@ -240,12 +240,15 @@ async function runAnalysis() {
     backupCount: 0,
   };
 
+  const CONCURRENCY = parseInt(process.env.CONCURRENCY ?? "10", 10);
+
   console.log("=".repeat(70));
   console.log("SOLANA TOKEN ECOSYSTEM ANALYSIS");
   console.log(`Threshold: ${formatUsd(config.marketCapThreshold)} market cap`);
   console.log(`Survival: >${formatUsd(config.liquiditySurvivalThreshold)} liquidity`);
   console.log(`Analysis window: ${config.analysisWindowDays ? config.analysisWindowDays + " days" : "all available (March 2024 – present)"}`);
   console.log(`Data available from: March 20, 2024`);
+  console.log(`Concurrency: ${CONCURRENCY} parallel workers`);
   console.log("=".repeat(70));
 
   // ── Phase 1: Token Discovery ────────────────────────────────────────
@@ -259,7 +262,7 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 6; // v6=adaptive weekly splitting when monthly hits 10K cap
+  const DISCOVERY_VERSION = 7; // v7=parallel workers + global sweep 10K cap fallback
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   // Auto-clear all cached data when version changes (no manual cache clear needed)
@@ -320,11 +323,11 @@ async function runAnalysis() {
     }
   }
 
-  // Screen remaining tokens
-  for (let i = 0; i < allTokens.length; i++) {
-    const token = allTokens[i];
-    if (weeklyCompleted.has(token.address)) continue;
+  // Screen remaining tokens (parallel)
+  const weeklyTodo = allTokens.filter((t) => !weeklyCompleted.has(t.address));
+  console.log(`  [weekly] ${weeklyTodo.length} tokens to screen (${CONCURRENCY} workers)...`);
 
+  await parallelMap(weeklyTodo, async (token) => {
     try {
       const itemStart = Date.now();
       const result = await weeklyPreScreen(client, token, config);
@@ -337,7 +340,7 @@ async function runAnalysis() {
       pWeekly.completed++;
       updateEta(pWeekly, Date.now() - itemStart);
 
-      if (pWeekly.completed % 100 === 0 || pWeekly.completed === 1) {
+      if (pWeekly.completed % 200 === 0 || pWeekly.completed === 1) {
         const eta = formatEta(pWeekly);
         console.log(
           `  [weekly] (${pWeekly.completed}/${pWeekly.total}) ` +
@@ -351,7 +354,7 @@ async function runAnalysis() {
       pWeekly.errors++;
       console.error(`  [weekly] Error screening ${token.symbol}:`, err);
     }
-  }
+  }, CONCURRENCY);
 
   pWeekly.status = "completed";
   pWeekly.completedAt = new Date().toISOString();
@@ -389,11 +392,11 @@ async function runAnalysis() {
     }
   }
 
-  // Analyze remaining tokens
-  for (let i = 0; i < weeklyPassed.length; i++) {
-    const { token, estimatedPeakMcap } = weeklyPassed[i];
-    if (hourlyCompleted.has(token.address)) continue;
+  // Analyze remaining tokens (parallel)
+  const hourlyTodo = weeklyPassed.filter(({ token }) => !hourlyCompleted.has(token.address));
+  console.log(`  [hourly] ${hourlyTodo.length} tokens to analyze (${CONCURRENCY} workers)...`);
 
+  await parallelMap(hourlyTodo, async ({ token, estimatedPeakMcap }) => {
     try {
       const itemStart = Date.now();
       console.log(
@@ -422,7 +425,7 @@ async function runAnalysis() {
       pHourly.errors++;
       console.error(`  [hourly] Error analyzing ${token.symbol}:`, err);
     }
-  }
+  }, CONCURRENCY);
 
   pHourly.status = "completed";
   pHourly.completedAt = new Date().toISOString();
@@ -476,14 +479,16 @@ async function runAnalysis() {
     }
   }
 
-  // Analyze remaining tokens
-  for (const token of qualifiedTokens) {
-    if (holdersCompleted.has(token.address)) {
-      // Check if we already loaded it (might have been invalidated)
-      const alreadyLoaded = holderAnalyses.some((h) => h.tokenAddress === token.address);
-      if (alreadyLoaded) continue;
+  // Analyze remaining tokens (parallel)
+  const holdersTodo = qualifiedTokens.filter((t) => {
+    if (holdersCompleted.has(t.address)) {
+      return !holderAnalyses.some((h) => h.tokenAddress === t.address);
     }
+    return true;
+  });
+  console.log(`  [holders] ${holdersTodo.length} tokens to analyze (${CONCURRENCY} workers)...`);
 
+  await parallelMap(holdersTodo, async (token) => {
     try {
       const itemStart = Date.now();
       console.log(
@@ -519,7 +524,7 @@ async function runAnalysis() {
       pHolders.errors++;
       console.error(`  [holders] Error analyzing ${token.symbol}:`, err);
     }
-  }
+  }, CONCURRENCY);
 
   pHolders.status = "completed";
   pHolders.completedAt = new Date().toISOString();
@@ -570,18 +575,22 @@ async function runAnalysis() {
     }
   }
 
-  // Analyze remaining tokens
-  for (const token of qualifiedTokens) {
-    if (survivalCompleted.has(token.address)) {
-      const alreadyLoaded = survivals.some((s) => s.tokenAddress === token.address);
-      if (alreadyLoaded) continue;
+  // Analyze remaining tokens (parallel)
+  const survivalTodo = qualifiedTokens.filter((t) => {
+    if (survivalCompleted.has(t.address)) {
+      return !survivals.some((s) => s.tokenAddress === t.address);
     }
+    return !!trajectoryMap.get(t.address);
+  });
+  // Count skipped (no trajectory data)
+  const skippedCount = qualifiedTokens.filter((t) =>
+    !survivalCompleted.has(t.address) && !trajectoryMap.get(t.address)
+  ).length;
+  pSurvival.skipped += skippedCount;
+  console.log(`  [survival] ${survivalTodo.length} tokens to analyze (${CONCURRENCY} workers)...`);
 
-    const trajectory = trajectoryMap.get(token.address);
-    if (!trajectory) {
-      pSurvival.skipped++;
-      continue;
-    }
+  await parallelMap(survivalTodo, async (token) => {
+    const trajectory = trajectoryMap.get(token.address)!;
 
     try {
       const itemStart = Date.now();
@@ -614,7 +623,7 @@ async function runAnalysis() {
       pSurvival.errors++;
       console.error(`  [survival] Error analyzing ${token.symbol}:`, err);
     }
-  }
+  }, CONCURRENCY);
 
   pSurvival.status = "completed";
   pSurvival.completedAt = new Date().toISOString();

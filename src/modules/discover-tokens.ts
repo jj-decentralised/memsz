@@ -221,8 +221,58 @@ export async function discoverAllCandidates(
 
   for (const sweep of globalSweeps) {
     console.log(`  [discover] Global sweep: ${sweep.label}`);
-    const { fetched, newCount } = await runSweep(client, sweep, seen, allTokens, onProgress);
-    console.log(`  [discover]   ${fetched} fetched, ${newCount} new (${allTokens.length} total unique)`);
+    const { fetched, newCount, hitCap } = await runSweep(client, sweep, seen, allTokens, onProgress);
+    console.log(`  [discover]   ${fetched} fetched, ${newCount} new (${allTokens.length} total unique)${hitCap ? " ⚠ HIT 10K CAP" : ""}`);
+
+    // If global sweep hit the 10K cap, re-scan with monthly createdAt windows
+    if (hitCap) {
+      console.log(`  [discover]   Falling back to monthly windows for "${sweep.label}"...`);
+      let extraFetched = 0;
+      let extraNew = 0;
+
+      for (const month of months) {
+        const windowedSweep: SweepConfig = {
+          label: `${sweep.label} [${month.label}]`,
+          filters: {
+            ...sweep.filters,
+            createdAt: { gte: month.gte, lte: month.lte },
+          },
+          rankings: sweep.rankings,
+        };
+
+        const monthResult = await runSweep(client, windowedSweep, seen, allTokens, onProgress);
+        extraFetched += monthResult.fetched;
+        extraNew += monthResult.newCount;
+
+        if (monthResult.fetched > 0) {
+          console.log(`    [${month.label}] ${monthResult.fetched} fetched, ${monthResult.newCount} new${monthResult.hitCap ? " ⚠ HIT 10K CAP" : ""}`);
+        }
+
+        // If monthly window also hits cap, split into weeks
+        if (monthResult.hitCap) {
+          const weeks = splitIntoWeeks(month);
+          console.log(`    [${month.label}] Splitting into ${weeks.length} weekly windows...`);
+          for (const week of weeks) {
+            const weekSweep: SweepConfig = {
+              label: `${sweep.label} [${week.label}]`,
+              filters: {
+                ...sweep.filters,
+                createdAt: { gte: week.gte, lte: week.lte },
+              },
+              rankings: sweep.rankings,
+            };
+            const weekResult = await runSweep(client, weekSweep, seen, allTokens, onProgress);
+            extraFetched += weekResult.fetched;
+            extraNew += weekResult.newCount;
+            if (weekResult.fetched > 0) {
+              console.log(`      [${week.label}] ${weekResult.fetched} fetched, ${weekResult.newCount} new${weekResult.hitCap ? " ⚠ HIT CAP" : ""}`);
+            }
+          }
+        }
+      }
+
+      console.log(`  [discover]   Windowed fallback: ${extraFetched} fetched, ${extraNew} new (${allTokens.length} total unique)`);
+    }
   }
 
   // ── Tier 2: Monthly windowed sweeps (catches faded/dead tokens) ──

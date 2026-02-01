@@ -21,7 +21,7 @@ export async function rateLimitedQuery<T>(
   client: GraphQLClient,
   query: string,
   variables: Record<string, unknown> = {},
-  delayMs = 250
+  delayMs = 100
 ): Promise<T> {
   await sleep(delayMs);
 

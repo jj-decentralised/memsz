@@ -114,3 +114,28 @@ export function chunk<T>(arr: T[], size: number): T[][] {
  * The earliest date for Solana data in Codex.io.
  */
 export const SOLANA_DATA_START = new Date("2024-03-20T00:00:00Z");
+
+/**
+ * Run async tasks with a concurrency pool.
+ * Calls `fn` for each item, with at most `concurrency` running simultaneously.
+ * Returns results in the same order as the input array.
+ */
+export async function parallelMap<T, R>(
+  items: T[],
+  fn: (item: T, index: number) => Promise<R>,
+  concurrency: number,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
