@@ -226,8 +226,14 @@ async function sweepWindows(
     }
 
     if (result.hitCap) {
-      // Try weekly split first; if window is already ≤7 days, go to daily
       const spanDays = (win.lte - win.gte) / 86400;
+
+      // If already at daily granularity (≤1 day), we can't split further — accept the 10K cap
+      if (spanDays <= 1) {
+        console.log(`${indent}[${win.label}] ⚠ Already at daily granularity, accepting 10K cap (${result.fetched} items)`);
+        continue;
+      }
+
       const subWindows = spanDays > 7 ? splitIntoWeeks(win) : splitIntoDays(win);
       const level = spanDays > 7 ? "weekly" : "daily";
       console.log(`${indent}[${win.label}] Splitting into ${subWindows.length} ${level} windows...`);

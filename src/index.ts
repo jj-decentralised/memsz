@@ -262,7 +262,7 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 8; // v8=recursive month→week→day splitting when hitting 10K cap
+  const DISCOVERY_VERSION = 9; // v9=fix infinite recursion when daily window hits 10K
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   // Auto-clear all cached data when version changes (no manual cache clear needed)
