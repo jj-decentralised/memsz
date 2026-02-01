@@ -705,7 +705,7 @@ function startHealthServer() {
           progress: status.progress,
           lastRun: status.lastRun,
           lastError: status.lastError,
-        });
+        }, runProgress);
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(html);
         return;

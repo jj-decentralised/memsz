@@ -1,35 +1,47 @@
+/**
+ * Dashboard — WSJ-inspired design
+ *
+ * Black & white aesthetic with accent red for losses, green for gains.
+ * Includes live-updating status bar, SVG charts, and interactive data table.
+ */
+
 import type { AggregateReport, DashboardReport } from "../types/index.js";
+
+// ─── Formatters ─────────────────────────────────────────────────────────
 
 function fmtUsd(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
-  if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(0)}`;
+  if (v == null || isNaN(n)) return "\u2014";
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
 }
 
 function fmtPct(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
+  if (v == null || isNaN(n)) return "\u2014";
   return `${n.toFixed(1)}%`;
 }
 
 function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  if (!iso) return "\u2014";
+  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 }
 
 function fmtNum(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
+  if (v == null || isNaN(n)) return "\u2014";
   return n.toLocaleString("en-US");
 }
+
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// ─── Types ──────────────────────────────────────────────────────────────
 
 interface StatusInfo {
   state: string;
@@ -39,41 +51,202 @@ interface StatusInfo {
   lastError: string | null;
 }
 
+interface PhaseProgress {
+  name: string;
+  status: string;
+  total: number;
+  completed: number;
+  skipped: number;
+  errors: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  avgMsPerItem: number;
+  recentDurations: number[];
+}
+
+interface RunProgress {
+  runId: string;
+  startedAt: string;
+  currentPhase: string;
+  phases: Record<string, PhaseProgress>;
+  totalTokensDiscovered: number;
+  totalWeeklyPassed: number;
+  totalQualified: number;
+  lastBackupAt: string | null;
+  backupCount: number;
+}
+
+// ─── Progress Bar Builder ───────────────────────────────────────────────
+
+function buildProgressSection(rp: RunProgress): string {
+  const elapsed = Date.now() - new Date(rp.startedAt).getTime();
+  const elapsedStr = elapsed < 60000 ? "<1 min" :
+    elapsed < 3600000 ? `${Math.floor(elapsed / 60000)} min` :
+    `${Math.floor(elapsed / 3600000)}h ${Math.floor((elapsed % 3600000) / 60000)}m`;
+
+  const phaseOrder = ["discovery", "weeklyScreen", "hourlyAnalysis", "holders", "survival", "report"];
+  const phaseLabels: Record<string, string> = {
+    discovery: "Discovery",
+    weeklyScreen: "Weekly Screen",
+    hourlyAnalysis: "Hourly Analysis",
+    holders: "Holder P&L",
+    survival: "Survival",
+    report: "Report",
+  };
+
+  let rows = "";
+  for (const key of phaseOrder) {
+    const p = rp.phases[key];
+    if (!p) continue;
+    const pct = p.total > 0 ? Math.round((p.completed / p.total) * 100) : (p.status === "completed" ? 100 : 0);
+    const remaining = p.total - p.completed - p.skipped - p.errors;
+    let eta = "";
+    if (p.status === "in_progress" && p.avgMsPerItem > 0 && remaining > 0) {
+      const etaMs = remaining * p.avgMsPerItem;
+      const etaMin = etaMs / 60000;
+      eta = etaMin < 1 ? "&lt;1m" : etaMin < 60 ? `~${Math.ceil(etaMin)}m` : `~${Math.floor(etaMin / 60)}h${Math.ceil(etaMin % 60)}m`;
+    }
+    const isCurrent = p.status === "in_progress";
+    const isDone = p.status === "completed";
+    const barColor = isDone ? "#222" : isCurrent ? "#222" : "#ccc";
+    const textColor = isDone ? "#222" : isCurrent ? "#222" : "#999";
+
+    rows += `
+      <div style="display:grid;grid-template-columns:120px 1fr 80px 60px;align-items:center;gap:12px;padding:6px 0;border-bottom:1px solid #eee">
+        <div style="font-size:11px;font-weight:${isCurrent ? 700 : 400};color:${textColor};letter-spacing:0.3px;text-transform:uppercase">
+          ${isCurrent ? "\u25B6 " : isDone ? "\u2713 " : ""}${phaseLabels[key] ?? key}
+        </div>
+        <div style="height:6px;background:#eee;position:relative;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.8s ease"></div>
+        </div>
+        <div style="font-size:11px;color:${textColor};text-align:right;font-variant-numeric:tabular-nums">
+          ${p.completed}/${p.total}${p.errors > 0 ? ` <span style="color:#c41200">(${p.errors}err)</span>` : ""}
+        </div>
+        <div style="font-size:10px;color:#999;text-align:right">${eta}</div>
+      </div>`;
+  }
+
+  return `
+    <div style="background:#fff;border:1px solid #d4d4d4;padding:20px 24px;margin:24px 0">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px">
+        <div style="font-family:var(--serif);font-size:16px;font-weight:700;letter-spacing:-0.3px">Pipeline Progress</div>
+        <div style="font-size:11px;color:#777">
+          Elapsed: ${elapsedStr}
+          ${rp.lastBackupAt ? ` &bull; Last backup: ${new Date(rp.lastBackupAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}` : ""}
+          ${rp.backupCount > 0 ? ` (${rp.backupCount} total)` : ""}
+        </div>
+      </div>
+      ${rows}
+      <div style="display:flex;gap:24px;margin-top:12px;font-size:11px;color:#777">
+        <span>Discovered: <strong style="color:#222">${fmtNum(rp.totalTokensDiscovered)}</strong></span>
+        <span>Passed Screen: <strong style="color:#222">${fmtNum(rp.totalWeeklyPassed)}</strong></span>
+        <span>Qualified ($10M+): <strong style="color:#222">${fmtNum(rp.totalQualified)}</strong></span>
+      </div>
+    </div>`;
+}
+
+// ─── SVG Chart Builders ─────────────────────────────────────────────────
+
+function buildSurvivalChart(sv: AggregateReport["survivalRates"] | null, totalReached: number): string {
+  if (!sv) return "";
+  const bars = [
+    { label: "Reached $10M", value: totalReached, pct: 100 },
+    { label: "Alive 30d", value: sv.days30.alive, pct: sv.days30.rate },
+    { label: "Alive 90d", value: sv.days90.alive, pct: sv.days90.rate },
+    { label: "Alive 365d", value: sv.days365.alive, pct: sv.days365.rate },
+  ];
+
+  const W = 480;
+  const H = 160;
+  const barH = 28;
+  const gap = 12;
+  const leftPad = 100;
+  const rightPad = 80;
+  const barW = W - leftPad - rightPad;
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;font-family:var(--sans)">`;
+  bars.forEach((b, i) => {
+    const y = i * (barH + gap);
+    const w = Math.max(2, (b.pct / 100) * barW);
+    const fill = i === 0 ? "#222" : b.pct >= 50 ? "#333" : b.pct >= 20 ? "#666" : "#c41200";
+    svg += `
+      <text x="${leftPad - 8}" y="${y + barH / 2 + 4}" text-anchor="end" font-size="11" fill="#555">${b.label}</text>
+      <rect x="${leftPad}" y="${y}" width="${w}" height="${barH}" fill="${fill}" rx="1"/>
+      <text x="${leftPad + w + 8}" y="${y + barH / 2 + 4}" font-size="11" fill="#222" font-weight="600">${b.value}</text>
+      <text x="${leftPad + w + 8 + String(b.value).length * 7 + 4}" y="${y + barH / 2 + 4}" font-size="10" fill="#999">(${fmtPct(b.pct)})</text>
+    `;
+  });
+  svg += "</svg>";
+  return svg;
+}
+
+function buildPnlDistChart(dist: { bigLoss: number; moderateLoss: number; breakeven: number; moderateGain: number; bigGain: number } | undefined, total: number): string {
+  if (!dist || total <= 0) return "";
+  const segments = [
+    { label: "Big Loss", value: dist.bigLoss, color: "#222" },
+    { label: "Mod. Loss", value: dist.moderateLoss, color: "#666" },
+    { label: "Even", value: dist.breakeven, color: "#bbb" },
+    { label: "Mod. Gain", value: dist.moderateGain, color: "#999" },
+    { label: "Big Gain", value: dist.bigGain, color: "#444" },
+  ];
+  const W = 480;
+  const barH = 32;
+  let x = 0;
+  let rects = "";
+  let labels = "";
+  for (const seg of segments) {
+    const w = Math.max(0, (seg.value / total) * W);
+    if (w > 0) {
+      rects += `<rect x="${x}" y="0" width="${w}" height="${barH}" fill="${seg.color}"/>`;
+      if (w > 30) {
+        rects += `<text x="${x + w / 2}" y="${barH / 2 + 4}" text-anchor="middle" font-size="10" fill="#fff" font-weight="600">${Math.round((seg.value / total) * 100)}%</text>`;
+      }
+    }
+    x += w;
+  }
+  // Legend
+  let lx = 0;
+  for (const seg of segments) {
+    labels += `<rect x="${lx}" y="${barH + 8}" width="8" height="8" fill="${seg.color}" rx="1"/>`;
+    labels += `<text x="${lx + 12}" y="${barH + 15}" font-size="9" fill="#777">${seg.label} (${seg.value})</text>`;
+    lx += 90;
+  }
+  return `<svg viewBox="0 0 ${W} ${barH + 24}" style="width:100%;max-width:${W}px;height:auto;font-family:var(--sans)">${rects}${labels}</svg>`;
+}
+
+// ─── Main Renderer ──────────────────────────────────────────────────────
+
 export function renderDashboard(
   report: AggregateReport | DashboardReport | null,
-  status: StatusInfo
+  status: StatusInfo,
+  runProgress?: RunProgress | null,
 ): string {
   const s = report?.summary;
   const h = report?.holderSummary;
   const sv = report?.survivalRates;
 
-  // All qualified tokens sorted by peak market cap
   const allTokens = report?.tokenDetails
     ?.filter((t) => t.trajectory?.reachedThreshold)
     .sort((a, b) => (b.trajectory?.peakMarketCap ?? 0) - (a.trajectory?.peakMarketCap ?? 0))
     ?? [];
 
-  // Survival funnel data
-  const funnelData = sv
-    ? [
-        { label: "Reached $10M", count: s?.tokensReached10M ?? 0, pct: 100 },
-        {
-          label: "Alive at 30 days",
-          count: sv.days30.alive,
-          pct: sv.days30.rate,
-        },
-        {
-          label: "Alive at 90 days",
-          count: sv.days90.alive,
-          pct: sv.days90.rate,
-        },
-        {
-          label: "Alive at 365 days",
-          count: sv.days365.alive,
-          pct: sv.days365.rate,
-        },
-      ]
-    : [];
+  // Compute aggregate P&L distribution from individual token data
+  const aggDist = { bigLoss: 0, moderateLoss: 0, breakeven: 0, moderateGain: 0, bigGain: 0 };
+  let totalDistWallets = 0;
+  for (const t of allTokens) {
+    if (t.holders?.pnlDistribution) {
+      const d = t.holders.pnlDistribution;
+      aggDist.bigLoss += d.bigLoss;
+      aggDist.moderateLoss += d.moderateLoss;
+      aggDist.breakeven += d.breakeven;
+      aggDist.moderateGain += d.moderateGain;
+      aggDist.bigGain += d.bigGain;
+      totalDistWallets += d.bigLoss + d.moderateLoss + d.breakeven + d.moderateGain + d.bigGain;
+    }
+  }
+
+  const isRunning = status.state === "running";
+  const hasData = !!report;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -81,21 +254,25 @@ export function renderDashboard(
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Solana Token Ecosystem Analysis</title>
+  ${isRunning ? '<meta http-equiv="refresh" content="30">' : ""}
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
     :root {
-      --ink: #121212;
-      --ink-secondary: #444;
-      --ink-tertiary: #777;
+      --serif: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      --sans: 'Inter', -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      --mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+      --ink: #111;
+      --ink-2: #444;
+      --ink-3: #777;
+      --ink-4: #aaa;
       --rule: #d4d4d4;
-      --rule-heavy: #222;
-      --bg: #faf9f6;
-      --bg-card: #fff;
-      --accent: #c41200;
-      --accent-green: #14713a;
-      --accent-amber: #b8860b;
-      --font-serif: "Tiempos Headline", "Georgia", "Times New Roman", serif;
-      --font-sans: "Retina", -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
-      --font-mono: "Retina Mono", "SF Mono", "Consolas", monospace;
+      --rule-h: #111;
+      --bg: #fafaf8;
+      --card: #fff;
+      --red: #c41200;
+      --green: #14713a;
+      --amber: #b8860b;
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -103,650 +280,540 @@ export function renderDashboard(
     body {
       background: var(--bg);
       color: var(--ink);
-      font-family: var(--font-sans);
-      font-size: 15px;
-      line-height: 1.5;
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.55;
       -webkit-font-smoothing: antialiased;
     }
 
-    .masthead {
-      border-bottom: 3px double var(--rule-heavy);
-      padding: 24px 0 16px;
-      text-align: center;
-      margin-bottom: 0;
-    }
-
-    .masthead h1 {
-      font-family: var(--font-serif);
-      font-size: 32px;
-      font-weight: 700;
-      letter-spacing: -0.5px;
-      color: var(--ink);
-    }
-
-    .masthead .dateline {
+    /* ── Status Ticker ── */
+    .ticker {
+      background: #111;
+      color: #eee;
       font-size: 12px;
-      color: var(--ink-tertiary);
+      padding: 8px 0;
+      letter-spacing: 0.3px;
+      overflow: hidden;
+    }
+    .ticker .wrap {
+      max-width: 1140px;
+      margin: 0 auto;
+      padding: 0 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+    .ticker .label {
       text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 600;
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+    .ticker .detail { color: #bbb; }
+    .ticker .pulse {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .ticker .pulse.live { background: #4ade80; animation: pulse 2s infinite; }
+    .ticker .pulse.done { background: #4ade80; }
+    .ticker .pulse.err { background: #f87171; }
+    .ticker .pulse.idle { background: #777; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* ── Masthead ── */
+    .masthead {
+      border-bottom: 4px double #111;
+      padding: 32px 0 20px;
+      text-align: center;
+    }
+    .masthead h1 {
+      font-family: var(--serif);
+      font-size: 38px;
+      font-weight: 900;
+      letter-spacing: -1px;
+      line-height: 1.1;
+    }
+    .masthead .deck {
+      font-size: 13px;
+      color: var(--ink-3);
       letter-spacing: 1.5px;
-      margin-top: 6px;
+      text-transform: uppercase;
+      margin-top: 8px;
+    }
+    .masthead .rule-thin {
+      width: 60px;
+      height: 1px;
+      background: var(--ink-4);
+      margin: 12px auto 0;
     }
 
     .container {
-      max-width: 1120px;
+      max-width: 1140px;
       margin: 0 auto;
       padding: 0 24px;
     }
 
-    .status-bar {
-      background: ${report ? (status.state === "completed" ? "#f0f7f0" : "#fff8e1") : "#fff3f0"};
-      border-bottom: 1px solid var(--rule);
-      padding: 8px 0;
-      font-size: 12px;
-      color: var(--ink-secondary);
-      text-align: center;
-    }
-
-    .status-bar strong {
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    /* ── Headline Numbers ── */
-    .headline-grid {
+    /* ── Headline Grid ── */
+    .headlines {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
       border-bottom: 1px solid var(--rule);
-      margin: 0;
     }
-
-    .headline-stat {
-      padding: 28px 20px;
+    .hl {
+      padding: 32px 20px 28px;
       text-align: center;
       border-right: 1px solid var(--rule);
     }
-
-    .headline-stat:last-child { border-right: none; }
-
-    .headline-stat .number {
-      font-family: var(--font-serif);
-      font-size: 42px;
-      font-weight: 700;
-      line-height: 1.1;
-      color: var(--ink);
+    .hl:last-child { border-right: none; }
+    .hl .n {
+      font-family: var(--serif);
+      font-size: 46px;
+      font-weight: 900;
+      line-height: 1;
+      letter-spacing: -1px;
     }
-
-    .headline-stat .number.accent { color: var(--accent); }
-    .headline-stat .number.green { color: var(--accent-green); }
-
-    .headline-stat .label {
-      font-size: 11px;
+    .hl .n.red { color: var(--red); }
+    .hl .n.green { color: var(--green); }
+    .hl .l {
+      font-size: 10px;
       text-transform: uppercase;
-      letter-spacing: 1.2px;
-      color: var(--ink-tertiary);
-      margin-top: 6px;
+      letter-spacing: 1.5px;
+      color: var(--ink-3);
+      margin-top: 8px;
+      font-weight: 500;
     }
-
-    .headline-stat .sub {
-      font-size: 13px;
-      color: var(--ink-secondary);
+    .hl .sub {
+      font-size: 12px;
+      color: var(--ink-2);
       margin-top: 4px;
     }
 
-    /* ── Section Layout ── */
-    .section {
-      padding: 32px 0 24px;
+    /* ── Sections ── */
+    .sec {
+      padding: 36px 0 28px;
       border-bottom: 1px solid var(--rule);
     }
-
-    .section-header {
-      font-family: var(--font-serif);
+    .sec-h {
+      font-family: var(--serif);
       font-size: 22px;
       font-weight: 700;
+      letter-spacing: -0.3px;
       margin-bottom: 4px;
-      color: var(--ink);
     }
-
-    .section-deck {
-      font-size: 14px;
-      color: var(--ink-secondary);
+    .sec-d {
+      font-size: 13px;
+      color: var(--ink-2);
       margin-bottom: 20px;
-      max-width: 680px;
+      max-width: 700px;
+      line-height: 1.6;
     }
 
     .two-col {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 40px;
+      gap: 48px;
     }
 
-    /* ── Survival Funnel ── */
-    .funnel { margin-top: 8px; }
-
-    .funnel-row {
-      display: flex;
-      align-items: center;
-      margin-bottom: 12px;
+    /* ── Stat Boxes ── */
+    .sg {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+    }
+    .sb {
+      padding: 18px 16px;
+      border-right: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+    }
+    .sb:nth-child(3n) { border-right: none; }
+    .sb .v {
+      font-family: var(--serif);
+      font-size: 26px;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.5px;
+    }
+    .sb .v.red { color: var(--red); }
+    .sb .v.green { color: var(--green); }
+    .sb .v.amber { color: var(--amber); }
+    .sb .d {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--ink-3);
+      margin-top: 4px;
+      font-weight: 500;
     }
 
-    .funnel-label {
-      width: 150px;
-      font-size: 13px;
-      color: var(--ink-secondary);
-      flex-shrink: 0;
-    }
-
-    .funnel-bar-wrap {
-      flex: 1;
-      background: #eee;
-      height: 28px;
-      position: relative;
-      margin: 0 12px;
-    }
-
-    .funnel-bar {
-      height: 100%;
-      background: var(--ink);
-      transition: width 0.6s ease;
-    }
-
-    .funnel-bar.dead { background: var(--accent); }
-
-    .funnel-value {
-      width: 100px;
-      text-align: right;
-      font-family: var(--font-mono);
-      font-size: 14px;
-      flex-shrink: 0;
-    }
-
-    /* ── Data Table ── */
-    .data-table {
+    /* ── Table ── */
+    .tbl {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
     }
-
-    .data-table thead th {
-      font-size: 10px;
+    .tbl thead th {
+      font-size: 9px;
       text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--ink-tertiary);
+      letter-spacing: 1.2px;
+      color: var(--ink-3);
       font-weight: 600;
-      padding: 8px 10px;
-      border-bottom: 2px solid var(--rule-heavy);
+      padding: 10px 10px;
+      border-bottom: 2px solid var(--rule-h);
       text-align: left;
       white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
     }
-
-    .data-table thead th.num {
-      text-align: right;
-    }
-
-    .data-table tbody td {
-      padding: 7px 10px;
-      border-bottom: 1px solid var(--rule);
+    .tbl thead th:hover { color: var(--ink); }
+    .tbl thead th.num { text-align: right; }
+    .tbl tbody td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #eee;
       vertical-align: middle;
     }
-
-    .data-table tbody td.num {
+    .tbl tbody td.num {
       text-align: right;
-      font-family: var(--font-mono);
+      font-family: var(--mono);
       font-size: 12px;
+      font-variant-numeric: tabular-nums;
     }
-
-    .data-table tbody td.symbol {
+    .tbl tbody td.sym {
       font-weight: 700;
       font-size: 13px;
     }
-
-    .data-table tbody tr:hover { background: #f5f5f2; }
+    .tbl tbody tr:hover { background: #f7f7f5; }
+    .tbl tbody tr:nth-child(even) { background: #fcfcfa; }
+    .tbl tbody tr:nth-child(even):hover { background: #f7f7f5; }
 
     .tag {
       display: inline-block;
-      padding: 1px 6px;
-      font-size: 10px;
-      font-weight: 600;
+      padding: 2px 7px;
+      font-size: 9px;
+      font-weight: 700;
       letter-spacing: 0.5px;
       text-transform: uppercase;
-      border-radius: 2px;
+    }
+    .tag.alive { background: #111; color: #fff; }
+    .tag.dead { background: #eee; color: #888; }
+    .tag.yes { background: #e8f5e9; color: var(--green); }
+    .tag.no { background: #fce4ec; color: var(--red); }
+
+    /* ── Search ── */
+    .search-wrap {
+      position: relative;
+    }
+    .search-wrap input {
+      padding: 8px 12px 8px 32px;
+      border: 1px solid var(--rule);
+      font-size: 13px;
+      font-family: var(--sans);
+      width: 240px;
+      background: var(--card);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .search-wrap input:focus { border-color: #111; }
+    .search-wrap svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      fill: #999;
     }
 
-    .tag.alive {
-      background: #e8f5e9;
-      color: var(--accent-green);
-    }
-
-    .tag.dead {
-      background: #fce4ec;
-      color: var(--accent);
-    }
-
-    /* ── Key Stats Boxes ── */
-    .stat-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 0;
-    }
-
-    .stat-box {
-      padding: 20px;
-      border-right: 1px solid var(--rule);
-      border-bottom: 1px solid var(--rule);
-    }
-
-    .stat-box:nth-child(3n) { border-right: none; }
-
-    .stat-box .val {
-      font-family: var(--font-serif);
-      font-size: 28px;
-      font-weight: 700;
-      line-height: 1.2;
-    }
-
-    .stat-box .val.red { color: var(--accent); }
-    .stat-box .val.green { color: var(--accent-green); }
-    .stat-box .val.amber { color: var(--accent-amber); }
-
-    .stat-box .desc {
-      font-size: 12px;
-      color: var(--ink-tertiary);
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      margin-top: 4px;
-    }
-
-    /* ── P&L Distribution ── */
-    .dist-bar-row {
-      display: flex;
-      height: 32px;
-      margin: 12px 0;
-      overflow: hidden;
-    }
-
-    .dist-segment {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-      font-weight: 600;
-      color: #fff;
-      transition: width 0.6s ease;
-      min-width: 0;
-    }
-
-    .dist-segment.loss-big { background: #b71c1c; }
-    .dist-segment.loss-mod { background: #e57373; }
-    .dist-segment.even { background: #bdbdbd; color: var(--ink); }
-    .dist-segment.gain-mod { background: #81c784; color: var(--ink); }
-    .dist-segment.gain-big { background: #2e7d32; }
-
-    .dist-legend {
-      display: flex;
-      gap: 16px;
-      font-size: 11px;
-      color: var(--ink-secondary);
-      margin-top: 4px;
-    }
-
-    .dist-legend span::before {
-      content: "";
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      margin-right: 4px;
-      vertical-align: middle;
-    }
-
-    .dist-legend .l-lb::before { background: #b71c1c; }
-    .dist-legend .l-lm::before { background: #e57373; }
-    .dist-legend .l-e::before { background: #bdbdbd; }
-    .dist-legend .l-gm::before { background: #81c784; }
-    .dist-legend .l-gb::before { background: #2e7d32; }
-
+    /* ── Footer ── */
     .footer {
-      padding: 24px 0;
+      padding: 32px 0;
       font-size: 11px;
-      color: var(--ink-tertiary);
+      color: var(--ink-3);
       text-align: center;
       border-top: 1px solid var(--rule);
-      margin-top: 32px;
+      margin-top: 40px;
+      line-height: 1.8;
     }
-
-    .footer a { color: var(--ink-tertiary); }
+    .footer a { color: var(--ink-3); text-decoration: underline; text-underline-offset: 2px; }
+    .footer a:hover { color: var(--ink); }
 
     .no-data {
       text-align: center;
       padding: 80px 20px;
-      color: var(--ink-tertiary);
     }
-
     .no-data h2 {
-      font-family: var(--font-serif);
+      font-family: var(--serif);
       font-size: 28px;
-      color: var(--ink);
       margin-bottom: 8px;
     }
+    .no-data p { color: var(--ink-3); }
 
     @media (max-width: 768px) {
-      .headline-grid { grid-template-columns: repeat(2, 1fr); }
-      .two-col { grid-template-columns: 1fr; }
-      .stat-grid { grid-template-columns: 1fr; }
-      .headline-stat .number { font-size: 32px; }
-      .funnel-label { width: 100px; font-size: 11px; }
+      .headlines { grid-template-columns: repeat(2, 1fr); }
+      .two-col { grid-template-columns: 1fr; gap: 24px; }
+      .sg { grid-template-columns: 1fr 1fr; }
+      .hl .n { font-size: 32px; }
+      .masthead h1 { font-size: 28px; }
+      .search-wrap input { width: 100%; }
     }
   </style>
 </head>
 <body>
 
-  <div class="status-bar">
-    <div class="container">
-      <strong>Status:</strong> ${status.state.toUpperCase()}
-      ${status.state === "running" ? ` &mdash; ${status.phase} (${status.progress})` : ""}
-      ${status.lastRun ? ` &mdash; Last updated ${fmtDate(status.lastRun)}` : ""}
-      ${status.lastError ? ` &mdash; <span style="color:var(--accent)">Error: ${status.lastError.slice(0, 80)}</span>` : ""}
+<!-- ═══ STATUS TICKER ═══ -->
+<div class="ticker">
+  <div class="wrap">
+    <div>
+      <span class="pulse ${isRunning ? "live" : status.state === "completed" ? "done" : status.state === "error" ? "err" : "idle"}"></span>
+      <span class="label">${esc(status.state)}</span>
+      ${isRunning ? `<span class="detail">&mdash; ${esc(status.phase)} (${esc(status.progress)})</span>` : ""}
+      ${status.lastRun ? `<span class="detail">&mdash; Updated ${fmtDate(status.lastRun)}</span>` : ""}
+      ${status.lastError ? `<span style="color:#f87171"> &mdash; ${esc(status.lastError.slice(0, 80))}</span>` : ""}
+    </div>
+    <div class="detail" style="flex-shrink:0">
+      <a href="/progress" style="color:#bbb;text-decoration:underline;text-underline-offset:2px">Live Progress</a>
+      &bull; <a href="/export/tokens.csv" style="color:#bbb;text-decoration:underline;text-underline-offset:2px">CSV</a>
+      &bull; <a href="/report" style="color:#bbb;text-decoration:underline;text-underline-offset:2px">JSON</a>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ═══ MASTHEAD ═══ -->
+  <div class="masthead">
+    <h1>Solana Token Ecosystem Analysis</h1>
+    <div class="deck">
+      ${hasData ? `${report!.parameters.analysisWindowDays ? `Last ${report!.parameters.analysisWindowDays} Days` : "March 2024 \u2013 Present"} &bull; ${fmtDate(report!.generatedAt)} &bull; Codex.io` : "Analysis Pending"}
+    </div>
+    <div class="rule-thin"></div>
+  </div>
+
+  ${(isRunning && runProgress) ? buildProgressSection(runProgress) : ""}
+
+  ${!hasData ? `
+  <div class="no-data">
+    <h2>Analysis In Progress</h2>
+    <p>The pipeline is currently running. This page refreshes automatically every 30 seconds.</p>
+    <p style="margin-top:16px;font-size:12px;color:var(--ink-4)">
+      <a href="/progress">/progress</a> &mdash; detailed phase-by-phase progress (JSON)
+    </p>
+  </div>
+  ` : `
+
+  <!-- ═══ HEADLINES ═══ -->
+  <div class="headlines">
+    <div class="hl">
+      <div class="n">${fmtNum(s?.tokensReached10M)}</div>
+      <div class="l">Tokens Hit $10M</div>
+      <div class="sub">of ${fmtNum(s?.totalCandidatesScanned)} scanned</div>
+    </div>
+    <div class="hl">
+      <div class="n green">${fmtNum(s?.tokensCurrentlyAbove10M)}</div>
+      <div class="l">Still Above $10M</div>
+      <div class="sub">${s && s.tokensReached10M > 0 ? fmtPct((s.tokensCurrentlyAbove10M / s.tokensReached10M) * 100) : "\u2014"} retention</div>
+    </div>
+    <div class="hl">
+      <div class="n red">${fmtPct(h?.overallLossPercentage)}</div>
+      <div class="l">Wallets In Loss</div>
+      <div class="sub">${fmtNum(h?.totalHoldersAnalyzed)} wallets</div>
+    </div>
+    <div class="hl">
+      <div class="n">${s?.medianHoursAbove10M != null ? Number(s.medianHoursAbove10M).toFixed(0) : "\u2014"}</div>
+      <div class="l">Median Hours &gt;$10M</div>
+      <div class="sub">${s?.averageDaysAbove10M != null ? "Avg " + Number(s.averageDaysAbove10M).toFixed(0) + " days" : "\u2014"}</div>
     </div>
   </div>
 
+  <!-- ═══ SURVIVAL & P&L ═══ -->
+  <div class="sec">
+    <div class="two-col">
+      <div>
+        <div class="sec-h">Survival Analysis</div>
+        <div class="sec-d">
+          Liquidity pool depth &gt;$100K at each checkpoint after first hitting $10M market cap.
+          Most tokens that reach $10M lose their liquidity within months.
+        </div>
+        ${buildSurvivalChart(sv ?? null, s?.tokensReached10M ?? 0)}
+
+        <div style="margin-top:24px">
+          <div class="sec-h" style="font-size:15px">P&L Distribution</div>
+          <div class="sec-d" style="font-size:12px;margin-bottom:12px">
+            How all ${fmtNum(h?.totalHoldersAnalyzed)} wallets are distributed across loss and gain buckets.
+          </div>
+          ${buildPnlDistChart(totalDistWallets > 0 ? aggDist : undefined, totalDistWallets)}
+        </div>
+      </div>
+      <div>
+        <div class="sec-h">Aggregate P&L</div>
+        <div class="sec-d">
+          Realized P&L covers the last ${report?.parameters.analysisWindowDays && report.parameters.analysisWindowDays <= 30 ? "30 days" : "12 months"} of trading (API limitation).
+          Unrealized is current holdings value minus cost basis.
+        </div>
+        <div class="sg">
+          <div class="sb"><div class="v green">${fmtUsd(h?.globalRealizedProfit)}</div><div class="d">Realized Profit</div></div>
+          <div class="sb"><div class="v red">${fmtUsd(h?.globalRealizedLoss)}</div><div class="d">Realized Loss</div></div>
+          <div class="sb"><div class="v ${Number(h?.globalNetPnl) >= 0 ? "green" : "red"}">${fmtUsd(h?.globalNetPnl)}</div><div class="d">Net P&L</div></div>
+          <div class="sb"><div class="v green">${fmtUsd(h?.globalUnrealizedProfit)}</div><div class="d">Unrealized Profit</div></div>
+          <div class="sb"><div class="v red">${fmtUsd(h?.globalUnrealizedLoss)}</div><div class="d">Unrealized Loss</div></div>
+          <div class="sb"><div class="v amber">${(() => { const pf = Number(h?.globalProfitFactor); return (isNaN(pf) || !isFinite(pf) || pf >= 999999) ? "\u221E" : pf.toFixed(2) + "x"; })()}</div><div class="d">Profit Factor</div></div>
+        </div>
+        <div style="margin-top:24px">
+          <div class="sec-h" style="font-size:15px">Per-Wallet Stats</div>
+          <div class="sg">
+            <div class="sb"><div class="v green">${fmtPct(h?.overallProfitPercentage)}</div><div class="d">In Profit</div></div>
+            <div class="sb"><div class="v red">${fmtPct(h?.overallLossPercentage)}</div><div class="d">In Loss</div></div>
+            <div class="sb"><div class="v">${fmtUsd(h?.top10PercentMaxProfit)}</div><div class="d">Top Earner</div></div>
+            <div class="sb"><div class="v">${fmtUsd(h?.globalAvgWin)}</div><div class="d">Avg Win</div></div>
+            <div class="sb"><div class="v red">${fmtUsd(h?.globalAvgLoss)}</div><div class="d">Avg Loss</div></div>
+            <div class="sb"><div class="v">${fmtUsd(h?.globalMedianPnl)}</div><div class="d">Median P&L</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TOKEN TABLE ═══ -->
+  <div class="sec" style="border-bottom:none;padding-bottom:0">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+      <div>
+        <div class="sec-h">All ${allTokens.length} Tokens That Reached $10M</div>
+        <div class="sec-d" style="margin-bottom:0">
+          Every Solana token that hit $10M market cap. Click headers to sort. Click symbol for full profile.
+        </div>
+      </div>
+      <div class="search-wrap">
+        <svg width="14" height="14" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><line x1="16" y1="16" x2="22" y2="22" stroke="currentColor" stroke-width="2"/></svg>
+        <input id="search" type="text" placeholder="Search tokens..." />
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+    <table class="tbl" id="tbl">
+      <thead>
+        <tr>
+          <th data-s="i">#</th>
+          <th data-s="sym">Token</th>
+          <th class="num" data-s="peak">Peak Mcap</th>
+          <th class="num" data-s="cur">Current</th>
+          <th class="num" data-s="hrs">Hours &gt;$10M</th>
+          <th class="num" data-s="days">Days</th>
+          <th class="num" data-s="prof">% Profit</th>
+          <th class="num" data-s="t10">Top 10% Avg</th>
+          <th class="num" data-s="liq">Liquidity</th>
+          <th data-s="s30">30d</th>
+          <th data-s="s90">90d</th>
+          <th data-s="s365">1y</th>
+          <th data-s="alive">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${allTokens.map((t, i) => {
+          const prof = t.holders ? t.holders.profitPercentage : -1;
+          const top10 = t.holders ? t.holders.top10PercentStats.averageProfit : 0;
+          const alive = t.survival?.currentlyAlive ?? false;
+          const s30 = t.survival?.checkpoints?.days30;
+          const s90 = t.survival?.checkpoints?.days90;
+          const s365 = t.survival?.checkpoints?.days365;
+          const peakMcap = t.trajectory?.peakMarketCap ?? 0;
+          const currentMcap = t.trajectory?.currentMarketCap ?? 0;
+          const daysAbove = t.trajectory?.daysAboveThreshold ?? 0;
+          const hoursAbove = (t.trajectory as any)?.hoursAboveThreshold ?? daysAbove * 24;
+          const liq = t.survival?.currentLiquidity ?? 0;
+          return `<tr
+            data-sym="${esc(t.symbol.toLowerCase())}"
+            data-peak="${peakMcap}" data-cur="${currentMcap}"
+            data-hrs="${hoursAbove}" data-days="${daysAbove}" data-prof="${prof}"
+            data-t10="${top10}" data-liq="${liq}"
+            data-s30="${s30 ? (s30.alive ? 1 : 0) : -1}"
+            data-s90="${s90 ? (s90.alive ? 1 : 0) : -1}"
+            data-s365="${s365 ? (s365.alive ? 1 : 0) : -1}"
+            data-alive="${alive ? 1 : 0}">
+            <td style="color:var(--ink-3);font-size:12px">${i + 1}</td>
+            <td class="sym"><a href="/token/${t.address}" style="color:var(--ink);text-decoration:none;border-bottom:1px solid transparent" onmouseover="this.style.borderColor='#111'" onmouseout="this.style.borderColor='transparent'">${esc(t.symbol)}</a></td>
+            <td class="num">${fmtUsd(peakMcap)}</td>
+            <td class="num">${fmtUsd(currentMcap)}</td>
+            <td class="num">${fmtNum(hoursAbove)}</td>
+            <td class="num">${fmtNum(daysAbove)}</td>
+            <td class="num">${prof >= 0 ? fmtPct(prof) : "\u2014"}</td>
+            <td class="num">${t.holders ? fmtUsd(top10) : "\u2014"}</td>
+            <td class="num">${fmtUsd(liq)}</td>
+            <td>${s30 ? `<span class="tag ${s30.alive ? "yes" : "no"}">${s30.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-4)">\u2014</span>'}</td>
+            <td>${s90 ? `<span class="tag ${s90.alive ? "yes" : "no"}">${s90.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-4)">\u2014</span>'}</td>
+            <td>${s365 ? `<span class="tag ${s365.alive ? "yes" : "no"}">${s365.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-4)">\u2014</span>'}</td>
+            <td><span class="tag ${alive ? "alive" : "dead"}">${alive ? "Active" : "Dead"}</span></td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>
+    </div>
+    <div style="text-align:center;padding:16px;font-size:12px;color:var(--ink-3)">
+      Showing <span id="cnt">${allTokens.length}</span> of ${allTokens.length} tokens
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    var tbl=document.getElementById('tbl');
+    if(!tbl)return;
+    var tbody=tbl.querySelector('tbody');
+    var search=document.getElementById('search');
+    var cnt=document.getElementById('cnt');
+    var sortCol='peak',sortDir=-1;
+
+    search.addEventListener('input',function(){
+      var q=this.value.toLowerCase(),vis=0;
+      tbody.querySelectorAll('tr').forEach(function(r){
+        var m=!q||r.getAttribute('data-sym').includes(q)||r.querySelector('.sym').textContent.toLowerCase().includes(q);
+        r.style.display=m?'':'none';
+        if(m)vis++;
+      });
+      cnt.textContent=vis;
+    });
+
+    tbl.querySelectorAll('th[data-s]').forEach(function(th){
+      th.addEventListener('click',function(){
+        var c=this.getAttribute('data-s');
+        if(sortCol===c)sortDir*=-1;else{sortCol=c;sortDir=-1;}
+        tbl.querySelectorAll('th').forEach(function(h){h.style.fontWeight='600';});
+        this.style.fontWeight='900';
+        var rows=Array.from(tbody.querySelectorAll('tr'));
+        rows.sort(function(a,b){
+          if(c==='sym'){var va=a.getAttribute('data-sym'),vb=b.getAttribute('data-sym');return sortDir*va.localeCompare(vb);}
+          if(c==='i')return sortDir*(rows.indexOf(a)-rows.indexOf(b));
+          var m={peak:'data-peak',cur:'data-cur',hrs:'data-hrs',days:'data-days',prof:'data-prof',t10:'data-t10',liq:'data-liq',s30:'data-s30',s90:'data-s90',s365:'data-s365',alive:'data-alive'};
+          var va=parseFloat(a.getAttribute(m[c])||'0'),vb=parseFloat(b.getAttribute(m[c])||'0');
+          return sortDir*(va-vb);
+        });
+        rows.forEach(function(r){tbody.appendChild(r);});
+      });
+    });
+  })();
+  </script>
+
+  `}
+</div>
+
+<!-- ═══ FOOTER ═══ -->
+<div class="footer">
   <div class="container">
-    <div class="masthead">
-      <h1>Solana Token Ecosystem Analysis</h1>
-      <div class="dateline">
-        ${report ? `${report.parameters.analysisWindowDays ? `Last ${report.parameters.analysisWindowDays} days` : "Data from March 20, 2024"} &mdash; ${fmtDate(report.generatedAt)} &bull; Powered by Codex.io` : "Analysis pending"}
-      </div>
-    </div>
-
-    ${!report ? `
-    <div class="no-data">
-      <h2>Analysis In Progress</h2>
-      <p>The pipeline is currently ${status.phase.toLowerCase()}. Check back shortly.</p>
-      <p style="margin-top:12px;font-size:12px;color:var(--ink-tertiary)">
-        GET <a href="/health">/health</a> for live status &bull;
-        GET <a href="/report/summary">/report/summary</a> for data once ready
-      </p>
-    </div>
-    ` : `
-
-    <!-- ═══ HEADLINE NUMBERS ═══ -->
-    <div class="headline-grid">
-      <div class="headline-stat">
-        <div class="number">${fmtNum(s?.tokensReached10M)}</div>
-        <div class="label">Tokens Hit $10M Market Cap</div>
-        <div class="sub">of ${fmtNum(s?.totalTokensAnalyzed)} total analyzed</div>
-      </div>
-      <div class="headline-stat">
-        <div class="number green">${fmtNum(s?.tokensCurrentlyAbove10M)}</div>
-        <div class="label">Still Above $10M Today</div>
-        <div class="sub">${fmtPct(s && s.tokensReached10M > 0 ? (s.tokensCurrentlyAbove10M / s.tokensReached10M) * 100 : 0)} retention rate</div>
-      </div>
-      <div class="headline-stat">
-        <div class="number accent">${fmtPct(h?.overallLossPercentage)}</div>
-        <div class="label">Holders In Loss</div>
-        <div class="sub">${fmtNum(h?.totalHoldersAnalyzed)} wallets analyzed</div>
-      </div>
-      <div class="headline-stat">
-        <div class="number">${s?.medianHoursAbove10M != null ? Number(s.medianHoursAbove10M).toFixed(0) : s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M * 24).toFixed(0) : "—"}</div>
-        <div class="label">Median Hours Above $10M</div>
-        <div class="sub">${s?.medianDaysAbove10M != null ? Number(s.medianDaysAbove10M).toFixed(0) + " days" : "—"} &bull; ${fmtNum(s?.totalCandidatesScanned)} tokens scanned</div>
-      </div>
-    </div>
-
-    <!-- ═══ SURVIVAL ANALYSIS ═══ -->
-    <div class="section">
-      <div class="two-col">
-        <div>
-          <div class="section-header">Token Survival Rates</div>
-          <div class="section-deck">
-            How many tokens maintain &gt;$100K in liquidity pool depth after hitting the $10M market cap milestone. Survival is measured at 30, 90, and 365-day checkpoints.
-          </div>
-          <div class="funnel">
-            ${funnelData.map((row) => `
-              <div class="funnel-row">
-                <div class="funnel-label">${row.label}</div>
-                <div class="funnel-bar-wrap">
-                  <div class="funnel-bar ${row.pct < 30 ? "dead" : ""}" style="width: ${Math.max(2, row.pct)}%"></div>
-                </div>
-                <div class="funnel-value">${row.count} (${fmtPct(row.pct)})</div>
-              </div>
-            `).join("")}
-          </div>
-        </div>
-        <div>
-          <div class="section-header">Holder Profit &amp; Loss</div>
-          <div class="section-deck">
-            Distribution of realized + unrealized returns across all wallet addresses that traded tokens which reached the $10M market cap threshold.
-          </div>
-          <div class="stat-grid">
-            <div class="stat-box">
-              <div class="val green">${fmtPct(h?.overallProfitPercentage)}</div>
-              <div class="desc">Wallets in Profit</div>
-            </div>
-            <div class="stat-box">
-              <div class="val red">${fmtPct(h?.overallLossPercentage)}</div>
-              <div class="desc">Wallets in Loss</div>
-            </div>
-            <div class="stat-box">
-              <div class="val">${fmtUsd(h?.top10PercentMaxProfit)}</div>
-              <div class="desc">Top Earner Profit</div>
-            </div>
-            <div class="stat-box">
-              <div class="val amber">${fmtUsd(h?.top10PercentAverageProfit)}</div>
-              <div class="desc">Top 10% Avg Profit</div>
-            </div>
-            <div class="stat-box">
-              <div class="val">${fmtUsd(h?.top10PercentMedianProfit)}</div>
-              <div class="desc">Top 10% Median Profit</div>
-            </div>
-            <div class="stat-box">
-              <div class="val">${fmtNum(h?.totalHoldersAnalyzed)}</div>
-              <div class="desc">Total Wallets Analyzed</div>
-            </div>
-          </div>
-
-          <!-- Global Aggregate P&L -->
-          <div style="margin-top:20px">
-            <div style="font-family:var(--font-serif);font-size:16px;font-weight:700;margin-bottom:4px">Aggregate P&L Across All Tokens</div>
-            <div style="font-size:11px;color:var(--ink-tertiary);margin-bottom:12px;line-height:1.4">
-              Realized P&amp;L covers the <strong>last ${report?.parameters.analysisWindowDays && report.parameters.analysisWindowDays <= 30 ? "30 days" : "12 months"}</strong> of trading activity (Codex API limitation — no all-time field available).
-              Unrealized P&amp;L is all-time (current holdings value minus total cost basis). Discovery uses 3 overlapping sweeps: liquidity &ge;$10K, holders &ge;500, market cap &ge;$50K.
-            </div>
-            <div class="stat-grid">
-              <div class="stat-box">
-                <div class="val green">${fmtUsd(h?.globalRealizedProfit)}</div>
-                <div class="desc">Total Realized Profit</div>
-              </div>
-              <div class="stat-box">
-                <div class="val red">${fmtUsd(h?.globalRealizedLoss)}</div>
-                <div class="desc">Total Realized Loss</div>
-              </div>
-              <div class="stat-box">
-                <div class="val ${Number(h?.globalNetPnl) >= 0 ? "green" : "red"}">${fmtUsd(h?.globalNetPnl)}</div>
-                <div class="desc">Net P&L (All Wallets)</div>
-              </div>
-              <div class="stat-box">
-                <div class="val green">${fmtUsd(h?.globalUnrealizedProfit)}</div>
-                <div class="desc">Unrealized Profit</div>
-              </div>
-              <div class="stat-box">
-                <div class="val red">${fmtUsd(h?.globalUnrealizedLoss)}</div>
-                <div class="desc">Unrealized Loss</div>
-              </div>
-              <div class="stat-box">
-                <div class="val amber">${(() => { const pf = Number(h?.globalProfitFactor); return (isNaN(pf) || !isFinite(pf) || pf >= 999999) ? "∞" : pf.toFixed(2) + "x"; })()}</div>
-                <div class="desc">Profit Factor</div>
-              </div>
-              <div class="stat-box">
-                <div class="val">${fmtUsd(h?.globalAvgWin)}</div>
-                <div class="desc">Avg Win (per token)</div>
-              </div>
-              <div class="stat-box">
-                <div class="val red">${fmtUsd(h?.globalAvgLoss)}</div>
-                <div class="desc">Avg Loss (per token)</div>
-              </div>
-              <div class="stat-box">
-                <div class="val">${fmtUsd(h?.globalMedianPnl)}</div>
-                <div class="desc">Median P&L (per token)</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══ ALL TOKENS TABLE ═══ -->
-    <div class="section" style="padding-bottom:0;border-bottom:none">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:12px">
-        <div>
-          <div class="section-header">All ${allTokens.length} Tokens That Reached $10M</div>
-          <div class="section-deck" style="margin-bottom:12px">
-            Every Solana token that hit $10M market cap since March 2024. Click column headers to sort.
-          </div>
-        </div>
-        <input id="token-search" type="text" placeholder="Search tokens..."
-          style="padding:6px 12px;border:1px solid var(--rule);font-size:13px;font-family:var(--font-sans);width:220px;background:var(--bg-card)" />
-      </div>
-      <div style="overflow-x:auto">
-      <table class="data-table" id="token-table">
-        <thead>
-          <tr>
-            <th data-sort="index">#</th>
-            <th data-sort="symbol">Token</th>
-            <th class="num" data-sort="peakMcap">Peak Mcap</th>
-            <th class="num" data-sort="currentMcap">Current Mcap</th>
-            <th class="num" data-sort="hoursAbove">Hours &gt;$10M</th>
-            <th class="num" data-sort="daysAbove">Days &gt;$10M</th>
-            <th class="num" data-sort="profitPct">% in Profit</th>
-            <th class="num" data-sort="top10Avg">Top 10% Avg</th>
-            <th class="num" data-sort="liq">Current Liq.</th>
-            <th class="num" data-sort="surv30">30d</th>
-            <th class="num" data-sort="surv90">90d</th>
-            <th class="num" data-sort="surv365">365d</th>
-            <th data-sort="status">Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${allTokens.map((t, i) => {
-            const prof = t.holders ? t.holders.profitPercentage : -1;
-            const top10 = t.holders ? t.holders.top10PercentStats.averageProfit : 0;
-            const alive = t.survival?.currentlyAlive ?? false;
-            const s30 = t.survival?.checkpoints?.days30;
-            const s90 = t.survival?.checkpoints?.days90;
-            const s365 = t.survival?.checkpoints?.days365;
-            const peakMcap = t.trajectory?.peakMarketCap ?? 0;
-            const currentMcap = t.trajectory?.currentMarketCap ?? 0;
-            const daysAbove = t.trajectory?.daysAboveThreshold ?? 0;
-            const hoursAbove = (t.trajectory as any)?.hoursAboveThreshold ?? daysAbove * 24;
-            const liq = t.survival?.currentLiquidity ?? 0;
-            return `
-              <tr data-symbol="${t.symbol.toLowerCase()}"
-                  data-peak="${peakMcap}" data-current="${currentMcap}"
-                  data-hours="${hoursAbove}" data-days="${daysAbove}" data-prof="${prof}"
-                  data-top10="${top10}" data-liq="${liq}"
-                  data-s30="${s30 ? (s30.alive ? 1 : 0) : -1}"
-                  data-s90="${s90 ? (s90.alive ? 1 : 0) : -1}"
-                  data-s365="${s365 ? (s365.alive ? 1 : 0) : -1}"
-                  data-alive="${alive ? 1 : 0}">
-                <td style="color:var(--ink-tertiary)">${i + 1}</td>
-                <td class="symbol"><a href="/token/${t.address}" style="text-decoration:none;color:var(--ink);font-weight:600">${t.symbol}</a></td>
-                <td class="num">${fmtUsd(peakMcap)}</td>
-                <td class="num">${fmtUsd(currentMcap)}</td>
-                <td class="num">${hoursAbove}</td>
-                <td class="num">${daysAbove}</td>
-                <td class="num">${prof >= 0 ? fmtPct(prof) : "—"}</td>
-                <td class="num">${t.holders ? fmtUsd(top10) : "—"}</td>
-                <td class="num">${fmtUsd(liq)}</td>
-                <td class="num">${s30 ? `<span class="tag ${s30.alive ? "alive" : "dead"}">${s30.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
-                <td class="num">${s90 ? `<span class="tag ${s90.alive ? "alive" : "dead"}">${s90.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
-                <td class="num">${s365 ? `<span class="tag ${s365.alive ? "alive" : "dead"}">${s365.alive ? "Yes" : "No"}</span>` : '<span style="color:var(--ink-tertiary)">—</span>'}</td>
-                <td><span class="tag ${alive ? "alive" : "dead"}">${alive ? "Active" : "Dead"}</span></td>
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
-      </div>
-      <div style="text-align:center;padding:16px;font-size:12px;color:var(--ink-tertiary)">
-        Showing <span id="visible-count">${allTokens.length}</span> of ${allTokens.length} tokens
-      </div>
-    </div>
-
-    <script>
-    (function() {
-      const table = document.getElementById('token-table');
-      const tbody = table.querySelector('tbody');
-      const search = document.getElementById('token-search');
-      const countEl = document.getElementById('visible-count');
-      let sortCol = 'peakMcap';
-      let sortDir = -1; // -1 = desc
-
-      // Search
-      search.addEventListener('input', function() {
-        const q = this.value.toLowerCase();
-        let visible = 0;
-        tbody.querySelectorAll('tr').forEach(function(row) {
-          const match = !q || row.getAttribute('data-symbol').includes(q) ||
-            row.querySelector('.symbol').textContent.toLowerCase().includes(q);
-          row.style.display = match ? '' : 'none';
-          if (match) visible++;
-        });
-        countEl.textContent = visible;
-      });
-
-      // Sort
-      table.querySelectorAll('th[data-sort]').forEach(function(th) {
-        th.style.cursor = 'pointer';
-        th.addEventListener('click', function() {
-          const col = this.getAttribute('data-sort');
-          if (sortCol === col) { sortDir *= -1; } else { sortCol = col; sortDir = -1; }
-
-          // Update header indicators
-          table.querySelectorAll('th').forEach(function(h) { h.style.fontWeight = '600'; });
-          this.style.fontWeight = '900';
-
-          const rows = Array.from(tbody.querySelectorAll('tr'));
-          rows.sort(function(a, b) {
-            var va, vb;
-            if (col === 'symbol') {
-              va = a.getAttribute('data-symbol'); vb = b.getAttribute('data-symbol');
-              return sortDir * va.localeCompare(vb);
-            }
-            if (col === 'index') {
-              return sortDir * (rows.indexOf(a) - rows.indexOf(b));
-            }
-            var attrMap = {
-              peakMcap: 'data-peak', currentMcap: 'data-current',
-              hoursAbove: 'data-hours', daysAbove: 'data-days', profitPct: 'data-prof',
-              top10Avg: 'data-top10', liq: 'data-liq',
-              surv30: 'data-s30', surv90: 'data-s90', surv365: 'data-s365',
-              status: 'data-alive'
-            };
-            va = parseFloat(a.getAttribute(attrMap[col]) || '0');
-            vb = parseFloat(b.getAttribute(attrMap[col]) || '0');
-            return sortDir * (va - vb);
-          });
-          rows.forEach(function(r) { tbody.appendChild(r); });
-        });
-      });
-    })();
-    </script>
-
-    `}
+    Data from <a href="https://codex.io">Codex.io</a> GraphQL API &bull;
+    Solana Network &bull;
+    Historical data from March 20, 2024 &bull;
+    Market cap = supply &times; historical price
+    <br>
+    <a href="/progress">/progress</a> &bull;
+    <a href="/health">/health</a> &bull;
+    <a href="/backups">/backups</a> &bull;
+    <a href="/report/summary">/summary</a> &bull;
+    <a href="/report">/report</a> &bull;
+    <a href="/export/tokens.csv">tokens.csv</a> &bull;
+    <a href="/export/wallets.csv">wallets.csv</a>
   </div>
-
-  <div class="footer">
-    <div class="container">
-      Data sourced from <a href="https://codex.io">Codex.io</a> GraphQL API &bull;
-      Solana network (ID 1399811149) &bull;
-      Historical data available from March 20, 2024 &bull;
-      Market cap = current circulating supply &times; historical price (approximation)
-      <br>
-      <a href="/health">/health</a> &bull;
-      <a href="/report/summary">/report/summary</a> &bull;
-      <a href="/report">/report (full JSON)</a> &bull;
-      <a href="/export/tokens.csv">tokens.csv</a> &bull;
-      <a href="/export/wallets.csv">wallets.csv</a>
-    </div>
-  </div>
+</div>
 
 </body>
 </html>`;

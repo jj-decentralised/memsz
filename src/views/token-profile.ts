@@ -1,11 +1,9 @@
 /**
- * Token Profile Page
+ * Token Profile Page — WSJ-inspired design
  *
- * Individual page for each token showing:
- * - Market cap trajectory chart
- * - Holder P&L breakdown
- * - Top profit / loss wallets
- * - Survival status
+ * Individual page for each token showing market cap chart,
+ * holder P&L breakdown, wallet tables, and survival checkpoints.
+ * Canvas-rendered market cap chart with $10M threshold line.
  */
 
 import type {
@@ -25,7 +23,7 @@ interface TokenProfileData {
 
 function fmtUsd(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
+  if (v == null || isNaN(n)) return "\u2014";
   const abs = Math.abs(n);
   const sign = n < 0 ? "-" : "";
   if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
@@ -36,27 +34,31 @@ function fmtUsd(v: unknown): string {
 
 function fmtPct(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
+  if (v == null || isNaN(n)) return "\u2014";
   return `${n.toFixed(1)}%`;
 }
 
 function fmtNum(v: unknown): string {
   const n = Number(v);
-  if (v == null || isNaN(n)) return "—";
+  if (v == null || isNaN(n)) return "\u2014";
   return n.toLocaleString("en-US");
 }
 
 function shortAddr(addr: string): string {
   if (addr.length <= 12) return addr;
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+  return `${addr.slice(0, 6)}\u2026${addr.slice(-4)}`;
+}
+
+function esc(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function walletRow(w: HolderPnL, i: number): string {
   const cls = w.totalPnlUsd >= 0 ? "green" : "red";
   return `
     <tr>
-      <td style="color:var(--ink-tertiary)">${i + 1}</td>
-      <td class="mono"><a href="https://solscan.io/account/${w.walletAddress}" target="_blank" rel="noopener">${shortAddr(w.walletAddress)}</a></td>
+      <td style="color:#999;font-size:12px">${i + 1}</td>
+      <td style="font-family:var(--mono);font-size:11px"><a href="https://solscan.io/account/${w.walletAddress}" target="_blank" rel="noopener" style="color:var(--ink);text-decoration:none;border-bottom:1px dotted #ccc">${shortAddr(w.walletAddress)}</a></td>
       <td class="num ${cls}">${fmtUsd(w.totalPnlUsd)}</td>
       <td class="num">${fmtUsd(w.realizedPnlUsd)}</td>
       <td class="num">${fmtUsd(w.unrealizedPnlUsd)}</td>
@@ -65,145 +67,216 @@ function walletRow(w: HolderPnL, i: number): string {
       <td class="num">${fmtUsd(w.amountSoldUsd)}</td>
       <td class="num">${fmtNum(w.buyCount)}</td>
       <td class="num">${fmtNum(w.sellCount)}</td>
-    </tr>
-  `;
+    </tr>`;
 }
 
 export function renderTokenProfile(data: TokenProfileData): string {
   const { trajectory: t, holders: h, survival: s } = data;
 
-  // Prepare chart data (daily market caps)
   const chartData = t?.dailyMarketCaps ?? [];
   const chartJson = JSON.stringify(
     chartData.map((d) => ({ t: d.timestamp * 1000, v: d.marketCap }))
   );
 
-  // P&L distribution data for chart
-  const distData = h ? JSON.stringify([
-    { label: "Big Loss (<-$1K)", value: h.pnlDistribution.bigLoss, color: "#c41200" },
-    { label: "Moderate Loss", value: h.pnlDistribution.moderateLoss, color: "#e8735a" },
-    { label: "Breakeven", value: h.pnlDistribution.breakeven, color: "#888" },
-    { label: "Moderate Gain", value: h.pnlDistribution.moderateGain, color: "#5ab87a" },
-    { label: "Big Gain (>$1K)", value: h.pnlDistribution.bigGain, color: "#14713a" },
-  ]) : "[]";
-
-  const totalProfit = h?.topProfitWallets?.reduce((s, w) => s + (w.totalPnlUsd > 0 ? w.totalPnlUsd : 0), 0) ?? 0;
-  const totalLoss = h?.topLossWallets?.reduce((s, w) => s + (w.totalPnlUsd < 0 ? w.totalPnlUsd : 0), 0) ?? 0;
+  const hoursAbove = (t as any)?.hoursAboveThreshold ?? (t?.daysAboveThreshold != null ? t.daysAboveThreshold * 24 : null);
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${data.symbol} — Solana Token Analysis</title>
+  <title>${esc(data.symbol)} \u2014 Solana Token Analysis</title>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
     :root {
-      --ink: #121212;
-      --ink-secondary: #444;
-      --ink-tertiary: #777;
+      --serif: 'Playfair Display', Georgia, 'Times New Roman', serif;
+      --sans: 'Inter', -apple-system, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      --mono: 'JetBrains Mono', 'SF Mono', 'Consolas', monospace;
+      --ink: #111;
+      --ink-2: #444;
+      --ink-3: #777;
+      --ink-4: #aaa;
       --rule: #d4d4d4;
-      --rule-heavy: #222;
-      --bg: #faf9f6;
-      --bg-card: #fff;
-      --accent: #c41200;
-      --green: #14713a;
+      --bg: #fafaf8;
+      --card: #fff;
       --red: #c41200;
+      --green: #14713a;
       --amber: #b8860b;
-      --font-serif: "Georgia", "Times New Roman", serif;
-      --font-sans: -apple-system, "Segoe UI", "Helvetica Neue", sans-serif;
-      --font-mono: "SF Mono", "Consolas", monospace;
     }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); font-size: 14px; line-height: 1.5; }
+    body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
     .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px; }
-    .back { font-size: 13px; color: var(--ink-tertiary); text-decoration: none; }
+    a { color: var(--ink); }
+    a:hover { color: var(--red); }
+
+    .back {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--ink-3);
+      text-decoration: none;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 500;
+    }
     .back:hover { color: var(--ink); }
 
-    .masthead { border-bottom: 3px double var(--rule-heavy); padding-bottom: 16px; margin-bottom: 24px; }
-    .masthead h1 { font-family: var(--font-serif); font-size: 36px; font-weight: 700; letter-spacing: -0.5px; }
-    .masthead .sub { font-size: 14px; color: var(--ink-secondary); margin-top: 4px; font-family: var(--font-mono); }
+    .masthead {
+      border-bottom: 4px double #111;
+      padding-bottom: 20px;
+      margin: 16px 0 0;
+    }
+    .masthead h1 {
+      font-family: var(--serif);
+      font-size: 42px;
+      font-weight: 900;
+      letter-spacing: -1px;
+      line-height: 1;
+    }
+    .masthead .addr {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-3);
+      margin-top: 8px;
+      word-break: break-all;
+    }
+    .masthead .status-line {
+      margin-top: 12px;
+      display: flex;
+      gap: 24px;
+      font-size: 13px;
+      color: var(--ink-2);
+    }
+    .masthead .status-line strong { color: var(--ink); }
 
-    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin: 20px 0; }
-    .stat-box { background: var(--bg-card); border: 1px solid var(--rule); padding: 16px; text-align: center; }
-    .stat-box .val { font-size: 22px; font-weight: 700; font-family: var(--font-serif); }
-    .stat-box .desc { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-tertiary); margin-top: 4px; }
+    /* ── Stats ── */
+    .sg { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .sb {
+      padding: 20px 16px;
+      border-right: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+    }
+    .sb:last-child { border-right: none; }
+    .sb .v {
+      font-family: var(--serif);
+      font-size: 24px;
+      font-weight: 700;
+      line-height: 1.2;
+      letter-spacing: -0.5px;
+    }
+    .sb .v.red { color: var(--red); }
+    .sb .v.green { color: var(--green); }
+    .sb .v.amber { color: var(--amber); }
+    .sb .d {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--ink-3);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    /* ── Sections ── */
+    .sec {
+      margin: 32px 0;
+      padding-top: 24px;
+      border-top: 1px solid var(--rule);
+    }
+    .sec-h {
+      font-family: var(--serif);
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      margin-bottom: 4px;
+    }
+    .sec-d {
+      font-size: 13px;
+      color: var(--ink-2);
+      margin-bottom: 16px;
+      line-height: 1.6;
+    }
+
+    /* ── Chart ── */
+    .chart-wrap {
+      width: 100%;
+      height: 320px;
+      background: var(--card);
+      border: 1px solid var(--rule);
+      position: relative;
+      margin-top: 12px;
+    }
+    .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+
+    /* ── P&L Bar ── */
+    .pnl-bar { display: flex; height: 28px; overflow: hidden; margin: 12px 0; }
+    .pnl-bar div { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: #fff; min-width: 2px; }
+
+    /* ── Table ── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } .sg { grid-template-columns: repeat(2, 1fr); } }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { text-align: left; padding: 8px 8px; border-bottom: 2px solid #111; font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-3); font-weight: 600; }
+    td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
     .green { color: var(--green); }
     .red { color: var(--red); }
-    .amber { color: var(--amber); }
 
-    .section { margin: 32px 0; padding-top: 24px; border-top: 1px solid var(--rule); }
-    .section-header { font-family: var(--font-serif); font-size: 20px; font-weight: 700; margin-bottom: 8px; }
-    .section-deck { font-size: 13px; color: var(--ink-secondary); margin-bottom: 16px; }
+    .tag {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .tag.alive { background: #111; color: #fff; }
+    .tag.dead { background: #eee; color: #888; }
 
-    .chart-container { width: 100%; height: 300px; background: var(--bg-card); border: 1px solid var(--rule); position: relative; }
-    canvas { width: 100% !important; height: 100% !important; }
-
-    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-    @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
-
-    .pnl-bar { display: flex; height: 32px; border-radius: 4px; overflow: hidden; margin: 12px 0; }
-    .pnl-bar div { display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; min-width: 2px; }
-
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--rule-heavy); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--ink-tertiary); }
-    td { padding: 6px 10px; border-bottom: 1px solid var(--rule); }
-    .num { text-align: right; font-variant-numeric: tabular-nums; }
-    .mono { font-family: var(--font-mono); font-size: 12px; }
-    a { color: var(--ink); }
-    a:hover { color: var(--accent); }
-
-    .tag { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
-    .tag.alive { background: #e6f4ea; color: var(--green); }
-    .tag.dead { background: #fde8e8; color: var(--red); }
+    .footer {
+      padding: 28px 0;
+      font-size: 11px;
+      color: var(--ink-3);
+      text-align: center;
+      border-top: 1px solid var(--rule);
+      margin-top: 32px;
+    }
+    .footer a { color: var(--ink-3); text-decoration: underline; text-underline-offset: 2px; }
   </style>
 </head>
 <body>
   <div class="container">
-    <a href="/" class="back">&larr; Back to Dashboard</a>
+    <a href="/" class="back">\u2190 Dashboard</a>
 
-    <div class="masthead" style="margin-top:12px">
-      <h1>${data.symbol}</h1>
-      <div class="sub">${data.address}</div>
+    <div class="masthead">
+      <h1>${esc(data.symbol)}</h1>
+      <div class="addr">${esc(data.address)}</div>
+      <div class="status-line">
+        <span>Peak: <strong>${fmtUsd(t?.peakMarketCap)}</strong></span>
+        <span>Current: <strong>${fmtUsd(t?.currentMarketCap)}</strong></span>
+        <span>Hours &gt;$10M: <strong>${hoursAbove != null ? fmtNum(hoursAbove) : "\u2014"}</strong></span>
+        <span>${s ? `<span class="tag ${s.currentlyAlive ? "alive" : "dead"}">${s.currentlyAlive ? "Active" : "Dead"}</span>` : ""}</span>
+      </div>
     </div>
 
     <!-- KEY METRICS -->
-    <div class="stat-grid">
-      <div class="stat-box">
-        <div class="val">${fmtUsd(t?.peakMarketCap)}</div>
-        <div class="desc">Peak Market Cap</div>
-      </div>
-      <div class="stat-box">
-        <div class="val">${fmtUsd(t?.currentMarketCap)}</div>
-        <div class="desc">Current Market Cap</div>
-      </div>
-      <div class="stat-box">
-        <div class="val">${(t as any)?.hoursAboveThreshold ?? (t?.daysAboveThreshold != null ? t.daysAboveThreshold * 24 : "—")}</div>
-        <div class="desc">Hours Above $10M</div>
-      </div>
-      <div class="stat-box">
-        <div class="val">${t?.daysAboveThreshold ?? "—"}</div>
-        <div class="desc">Days Above $10M</div>
-      </div>
-      <div class="stat-box">
-        <div class="val">${fmtUsd(s?.currentLiquidity)}</div>
-        <div class="desc">Current Liquidity</div>
-      </div>
-      <div class="stat-box">
-        <div class="val ${s?.currentlyAlive ? "green" : "red"}">${s?.currentlyAlive ? "Active" : "Dead"}</div>
-        <div class="desc">Status (&gt;$100K Liq)</div>
-      </div>
-      <div class="stat-box">
-        <div class="val">${fmtNum(h?.totalHoldersAnalyzed)}</div>
-        <div class="desc">Wallets Analyzed</div>
-      </div>
+    <div class="sg" style="margin-top:24px">
+      <div class="sb"><div class="v">${fmtUsd(t?.peakMarketCap)}</div><div class="d">Peak Market Cap</div></div>
+      <div class="sb"><div class="v">${fmtUsd(t?.currentMarketCap)}</div><div class="d">Current Market Cap</div></div>
+      <div class="sb"><div class="v">${hoursAbove != null ? fmtNum(hoursAbove) : "\u2014"}</div><div class="d">Hours Above $10M</div></div>
+      <div class="sb"><div class="v">${t?.daysAboveThreshold != null ? fmtNum(t.daysAboveThreshold) : "\u2014"}</div><div class="d">Days Above $10M</div></div>
+      <div class="sb"><div class="v">${fmtUsd(s?.currentLiquidity)}</div><div class="d">Current Liquidity</div></div>
+      <div class="sb"><div class="v">${fmtNum(h?.totalHoldersAnalyzed)}</div><div class="d">Wallets Analyzed</div></div>
     </div>
 
     <!-- MARKET CAP CHART -->
     ${chartData.length > 0 ? `
-    <div class="section" style="border-top:none; margin-top:0">
-      <div class="section-header">Market Cap Over Time</div>
-      <div class="section-deck">Daily market cap from OHLCV data, using current supply as proxy for historical supply.</div>
-      <div class="chart-container">
+    <div class="sec" style="border-top:none;margin-top:0;padding-top:24px">
+      <div class="sec-h">Market Cap Over Time</div>
+      <div class="sec-d">Daily market cap from OHLCV data. Dashed red line = $10M threshold.</div>
+      <div class="chart-wrap">
         <canvas id="mcap-chart"></canvas>
       </div>
     </div>
@@ -211,350 +284,257 @@ export function renderTokenProfile(data: TokenProfileData): string {
 
     <!-- HOLDER P&L -->
     ${h ? `
-    <div class="section">
-      <div class="section-header">Holder Profit &amp; Loss</div>
-      <div class="section-deck">${fmtNum(h.totalHoldersAnalyzed)} wallets analyzed. Realized + unrealized P&L based on 1-year trading data.</div>
+    <div class="sec">
+      <div class="sec-h">Holder Profit &amp; Loss</div>
+      <div class="sec-d">${fmtNum(h.totalHoldersAnalyzed)} active wallets analyzed. Realized + unrealized P&amp;L.</div>
 
-      <div class="stat-grid">
-        <div class="stat-box">
-          <div class="val green">${fmtPct(h.profitPercentage)}</div>
-          <div class="desc">In Profit</div>
+      <div class="sg">
+        <div class="sb"><div class="v green">${fmtPct(h.profitPercentage)}</div><div class="d">In Profit</div></div>
+        <div class="sb"><div class="v red">${fmtPct(100 - h.profitPercentage - (h.holdersBreakeven / Math.max(1, h.totalHoldersAnalyzed)) * 100)}</div><div class="d">In Loss</div></div>
+        <div class="sb"><div class="v">${fmtUsd(h.top10PercentStats.maxProfit)}</div><div class="d">Top Earner</div></div>
+        <div class="sb"><div class="v amber">${fmtUsd(h.top10PercentStats.averageProfit)}</div><div class="d">Top 10% Avg</div></div>
+      </div>
+
+      <!-- P&L Distribution -->
+      <div style="margin-top:24px">
+        <div class="sec-h" style="font-size:15px">P&L Distribution</div>
+        <div class="pnl-bar">
+          ${(() => {
+            const total = h.totalHoldersAnalyzed || 1;
+            const d = h.pnlDistribution;
+            return [
+              { pct: (d.bigLoss / total) * 100, color: "#222", label: `Big Loss (${d.bigLoss})` },
+              { pct: (d.moderateLoss / total) * 100, color: "#666", label: `Mod Loss (${d.moderateLoss})` },
+              { pct: (d.breakeven / total) * 100, color: "#bbb", label: `Even (${d.breakeven})` },
+              { pct: (d.moderateGain / total) * 100, color: "#999", label: `Mod Gain (${d.moderateGain})` },
+              { pct: (d.bigGain / total) * 100, color: "#444", label: `Big Gain (${d.bigGain})` },
+            ].filter((s) => s.pct > 0).map((s) =>
+              `<div style="width:${Math.max(s.pct, 1.5)}%;background:${s.color}" title="${s.label}">${s.pct > 8 ? Math.round(s.pct) + "%" : ""}</div>`
+            ).join("");
+          })()}
         </div>
-        <div class="stat-box">
-          <div class="val red">${fmtPct(100 - h.profitPercentage - (h.holdersBreakeven / Math.max(1, h.totalHoldersAnalyzed)) * 100)}</div>
-          <div class="desc">In Loss</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.top10PercentStats.maxProfit)}</div>
-          <div class="desc">Top Earner</div>
-        </div>
-        <div class="stat-box">
-          <div class="val amber">${fmtUsd(h.top10PercentStats.averageProfit)}</div>
-          <div class="desc">Top 10% Avg Profit</div>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:10px;color:var(--ink-3);margin-top:4px">
+          <span><span style="display:inline-block;width:8px;height:8px;background:#222"></span> Big Loss (&lt;-$1K)</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#666"></span> Mod Loss</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#bbb"></span> Breakeven</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#999"></span> Mod Gain</span>
+          <span><span style="display:inline-block;width:8px;height:8px;background:#444"></span> Big Gain (&gt;$10K)</span>
         </div>
       </div>
 
-      <!-- P&L Distribution Bar -->
-      <div class="section-header" style="font-size:16px; margin-top:24px">P&L Distribution</div>
-      <div class="pnl-bar">
-        ${(() => {
-          const total = h.totalHoldersAnalyzed || 1;
-          const d = h.pnlDistribution;
-          return [
-            { pct: (d.bigLoss / total) * 100, color: "#c41200", label: `Loss >$1K (${d.bigLoss})` },
-            { pct: (d.moderateLoss / total) * 100, color: "#e8735a", label: `Loss (${d.moderateLoss})` },
-            { pct: (d.breakeven / total) * 100, color: "#999", label: `Even (${d.breakeven})` },
-            { pct: (d.moderateGain / total) * 100, color: "#5ab87a", label: `Gain (${d.moderateGain})` },
-            { pct: (d.bigGain / total) * 100, color: "#14713a", label: `Gain >$1K (${d.bigGain})` },
-          ].filter((s) => s.pct > 0).map((s) =>
-            `<div style="width:${Math.max(s.pct, 2)}%;background:${s.color}" title="${s.label}">${s.pct > 8 ? Math.round(s.pct) + "%" : ""}</div>`
-          ).join("");
-        })()}
-      </div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:var(--ink-secondary);margin-top:4px">
-        <span><span style="display:inline-block;width:10px;height:10px;background:#c41200;border-radius:2px"></span> Big Loss</span>
-        <span><span style="display:inline-block;width:10px;height:10px;background:#e8735a;border-radius:2px"></span> Moderate Loss</span>
-        <span><span style="display:inline-block;width:10px;height:10px;background:#999;border-radius:2px"></span> Breakeven</span>
-        <span><span style="display:inline-block;width:10px;height:10px;background:#5ab87a;border-radius:2px"></span> Moderate Gain</span>
-        <span><span style="display:inline-block;width:10px;height:10px;background:#14713a;border-radius:2px"></span> Big Gain</span>
-      </div>
-
-      <!-- Aggregate P&L Stats -->
+      <!-- Aggregate P&L -->
       ${h.aggregatePnl ? `
-      <div class="section-header" style="font-size:16px; margin-top:24px">Aggregate P&L</div>
-      <div class="section-deck">Realized and unrealized profit/loss summed across all ${fmtNum(h.totalHoldersAnalyzed)} active wallets.</div>
-      <div class="stat-grid">
-        <div class="stat-box">
-          <div class="val green">${fmtUsd(h.aggregatePnl.totalRealizedProfit)}</div>
-          <div class="desc">Total Realized Profit</div>
-        </div>
-        <div class="stat-box">
-          <div class="val red">${fmtUsd(h.aggregatePnl.totalRealizedLoss)}</div>
-          <div class="desc">Total Realized Loss</div>
-        </div>
-        <div class="stat-box">
-          <div class="val ${h.aggregatePnl.netRealized >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netRealized)}</div>
-          <div class="desc">Net Realized</div>
-        </div>
-        <div class="stat-box">
-          <div class="val green">${fmtUsd(h.aggregatePnl.totalUnrealizedProfit)}</div>
-          <div class="desc">Unrealized Profit</div>
-        </div>
-        <div class="stat-box">
-          <div class="val red">${fmtUsd(h.aggregatePnl.totalUnrealizedLoss)}</div>
-          <div class="desc">Unrealized Loss</div>
-        </div>
-        <div class="stat-box">
-          <div class="val ${h.aggregatePnl.netTotal >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netTotal)}</div>
-          <div class="desc">Net Total P&L</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.aggregatePnl.totalVolumeBought)}</div>
-          <div class="desc">Total Volume Bought</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.aggregatePnl.totalVolumeSold)}</div>
-          <div class="desc">Total Volume Sold</div>
+      <div style="margin-top:24px">
+        <div class="sec-h" style="font-size:15px">Aggregate P&L</div>
+        <div class="sec-d" style="font-size:12px">Sum across all ${fmtNum(h.totalHoldersAnalyzed)} active wallets.</div>
+        <div class="sg">
+          <div class="sb"><div class="v green">${fmtUsd(h.aggregatePnl.totalRealizedProfit)}</div><div class="d">Realized Profit</div></div>
+          <div class="sb"><div class="v red">${fmtUsd(h.aggregatePnl.totalRealizedLoss)}</div><div class="d">Realized Loss</div></div>
+          <div class="sb"><div class="v ${h.aggregatePnl.netRealized >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netRealized)}</div><div class="d">Net Realized</div></div>
+          <div class="sb"><div class="v green">${fmtUsd(h.aggregatePnl.totalUnrealizedProfit)}</div><div class="d">Unrealized Profit</div></div>
+          <div class="sb"><div class="v red">${fmtUsd(h.aggregatePnl.totalUnrealizedLoss)}</div><div class="d">Unrealized Loss</div></div>
+          <div class="sb"><div class="v ${h.aggregatePnl.netTotal >= 0 ? "green" : "red"}">${fmtUsd(h.aggregatePnl.netTotal)}</div><div class="d">Net Total</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.aggregatePnl.totalVolumeBought)}</div><div class="d">Volume Bought</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.aggregatePnl.totalVolumeSold)}</div><div class="d">Volume Sold</div></div>
         </div>
       </div>
       ` : ""}
 
-      <!-- Econometric Stats -->
+      <!-- Econometrics -->
       ${h.econometrics ? `
-      <div class="section-header" style="font-size:16px; margin-top:24px">Econometric Analysis</div>
-      <div class="stat-grid">
-        <div class="stat-box">
-          <div class="val green">${fmtUsd(h.econometrics.avgWin)}</div>
-          <div class="desc">Average Win</div>
-        </div>
-        <div class="stat-box">
-          <div class="val red">${fmtUsd(h.econometrics.avgLoss)}</div>
-          <div class="desc">Average Loss</div>
-        </div>
-        <div class="stat-box">
-          <div class="val amber">${(() => { const pf = Number(h.econometrics.profitFactor); return (isFinite(pf) && pf > 0 && pf < 999999) ? pf.toFixed(2) + "x" : "∞"; })()}</div>
-          <div class="desc">Profit Factor</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtPct(h.econometrics.winRate)}</div>
-          <div class="desc">Win Rate</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.econometrics.medianPnl)}</div>
-          <div class="desc">Median P&L</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.econometrics.percentile25)}</div>
-          <div class="desc">25th Percentile</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.econometrics.percentile75)}</div>
-          <div class="desc">75th Percentile</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.econometrics.percentile90)}</div>
-          <div class="desc">90th Percentile</div>
-        </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(h.econometrics.percentile99)}</div>
-          <div class="desc">99th Percentile</div>
+      <div style="margin-top:24px">
+        <div class="sec-h" style="font-size:15px">Econometric Analysis</div>
+        <div class="sg">
+          <div class="sb"><div class="v green">${fmtUsd(h.econometrics.avgWin)}</div><div class="d">Avg Win</div></div>
+          <div class="sb"><div class="v red">${fmtUsd(h.econometrics.avgLoss)}</div><div class="d">Avg Loss</div></div>
+          <div class="sb"><div class="v amber">${(() => { const pf = Number(h.econometrics.profitFactor); return (isFinite(pf) && pf > 0 && pf < 999999) ? pf.toFixed(2) + "x" : "\u221E"; })()}</div><div class="d">Profit Factor</div></div>
+          <div class="sb"><div class="v">${fmtPct(h.econometrics.winRate)}</div><div class="d">Win Rate</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.econometrics.medianPnl)}</div><div class="d">Median P&L</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.econometrics.percentile75)}</div><div class="d">75th Pctl</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.econometrics.percentile90)}</div><div class="d">90th Pctl</div></div>
+          <div class="sb"><div class="v">${fmtUsd(h.econometrics.percentile99)}</div><div class="d">99th Pctl</div></div>
         </div>
       </div>
       ` : ""}
     </div>
 
     <!-- WALLET TABLES -->
-    <div class="section">
+    <div class="sec">
       <div class="two-col">
         <div>
-          <div class="section-header" style="font-size:16px">Top Profit Wallets</div>
-          <div class="section-deck">Total profit: ${fmtUsd(totalProfit)}</div>
-          <div style="overflow-x:auto">
+          <div class="sec-h" style="font-size:16px">Top Profit Wallets</div>
+          <div style="overflow-x:auto;margin-top:8px">
           <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Wallet</th>
-                <th class="num">Total P&L</th>
-                <th class="num">Realized</th>
-                <th class="num">Unrealized</th>
-                <th class="num">Cost Basis</th>
-                <th class="num">Bought</th>
-                <th class="num">Sold</th>
-                <th class="num">Buys</th>
-                <th class="num">Sells</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(h.topProfitWallets ?? []).map((w, i) => walletRow(w, i)).join("")}
-            </tbody>
+            <thead><tr>
+              <th>#</th><th>Wallet</th><th class="num">Total P&L</th><th class="num">Realized</th><th class="num">Unrealized</th>
+              <th class="num">Cost</th><th class="num">Bought</th><th class="num">Sold</th><th class="num">Buys</th><th class="num">Sells</th>
+            </tr></thead>
+            <tbody>${(h.topProfitWallets ?? []).map((w, i) => walletRow(w, i)).join("")}</tbody>
           </table>
           </div>
         </div>
         <div>
-          <div class="section-header" style="font-size:16px">Top Loss Wallets</div>
-          <div class="section-deck">Total loss: ${fmtUsd(totalLoss)}</div>
-          <div style="overflow-x:auto">
+          <div class="sec-h" style="font-size:16px">Top Loss Wallets</div>
+          <div style="overflow-x:auto;margin-top:8px">
           <table>
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Wallet</th>
-                <th class="num">Total P&L</th>
-                <th class="num">Realized</th>
-                <th class="num">Unrealized</th>
-                <th class="num">Cost Basis</th>
-                <th class="num">Bought</th>
-                <th class="num">Sold</th>
-                <th class="num">Buys</th>
-                <th class="num">Sells</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${(h.topLossWallets ?? []).map((w, i) => walletRow(w, i)).join("")}
-            </tbody>
+            <thead><tr>
+              <th>#</th><th>Wallet</th><th class="num">Total P&L</th><th class="num">Realized</th><th class="num">Unrealized</th>
+              <th class="num">Cost</th><th class="num">Bought</th><th class="num">Sold</th><th class="num">Buys</th><th class="num">Sells</th>
+            </tr></thead>
+            <tbody>${(h.topLossWallets ?? []).map((w, i) => walletRow(w, i)).join("")}</tbody>
           </table>
           </div>
         </div>
       </div>
     </div>
     ` : `
-    <div class="section">
-      <div class="section-header">Holder P&L</div>
-      <p style="color:var(--ink-tertiary)">No holder data available for this token.</p>
+    <div class="sec">
+      <div class="sec-h">Holder P&L</div>
+      <p style="color:var(--ink-3)">No holder data available for this token.</p>
     </div>
     `}
 
     <!-- SURVIVAL -->
     ${s ? `
-    <div class="section">
-      <div class="section-header">Survival Checkpoints</div>
-      <div class="section-deck">Liquidity &gt;$100K at each checkpoint after first reaching $10M market cap.</div>
-      <div class="stat-grid">
-        <div class="stat-box">
-          <div class="val">${fmtUsd(s.liquidityAtDiscovery)}</div>
-          <div class="desc">Liquidity at Discovery</div>
-        </div>
-        <div class="stat-box">
+    <div class="sec">
+      <div class="sec-h">Survival Checkpoints</div>
+      <div class="sec-d">Liquidity &gt;$100K at each checkpoint after first reaching $10M market cap.</div>
+      <div class="sg">
+        <div class="sb"><div class="v">${fmtUsd(s.liquidityAtDiscovery)}</div><div class="d">Liq at Discovery</div></div>
+        <div class="sb">
           ${s.checkpoints.days30
-            ? `<div class="val ${s.checkpoints.days30.alive ? "green" : "red"}">${s.checkpoints.days30.alive ? "Alive" : "Dead"}</div>
-               <div class="desc">30 Days (${fmtUsd(s.checkpoints.days30.liquidity)})</div>`
-            : `<div class="val" style="color:var(--ink-tertiary)">—</div><div class="desc">30 Days</div>`}
+            ? `<div class="v ${s.checkpoints.days30.alive ? "green" : "red"}">${s.checkpoints.days30.alive ? "Alive" : "Dead"}</div>
+               <div class="d">30d (${fmtUsd(s.checkpoints.days30.liquidity)})</div>`
+            : `<div class="v" style="color:var(--ink-4)">\u2014</div><div class="d">30 Days</div>`}
         </div>
-        <div class="stat-box">
+        <div class="sb">
           ${s.checkpoints.days90
-            ? `<div class="val ${s.checkpoints.days90.alive ? "green" : "red"}">${s.checkpoints.days90.alive ? "Alive" : "Dead"}</div>
-               <div class="desc">90 Days (${fmtUsd(s.checkpoints.days90.liquidity)})</div>`
-            : `<div class="val" style="color:var(--ink-tertiary)">—</div><div class="desc">90 Days</div>`}
+            ? `<div class="v ${s.checkpoints.days90.alive ? "green" : "red"}">${s.checkpoints.days90.alive ? "Alive" : "Dead"}</div>
+               <div class="d">90d (${fmtUsd(s.checkpoints.days90.liquidity)})</div>`
+            : `<div class="v" style="color:var(--ink-4)">\u2014</div><div class="d">90 Days</div>`}
         </div>
-        <div class="stat-box">
+        <div class="sb">
           ${s.checkpoints.days365
-            ? `<div class="val ${s.checkpoints.days365.alive ? "green" : "red"}">${s.checkpoints.days365.alive ? "Alive" : "Dead"}</div>
-               <div class="desc">365 Days (${fmtUsd(s.checkpoints.days365.liquidity)})</div>`
-            : `<div class="val" style="color:var(--ink-tertiary)">—</div><div class="desc">365 Days</div>`}
+            ? `<div class="v ${s.checkpoints.days365.alive ? "green" : "red"}">${s.checkpoints.days365.alive ? "Alive" : "Dead"}</div>
+               <div class="d">365d (${fmtUsd(s.checkpoints.days365.liquidity)})</div>`
+            : `<div class="v" style="color:var(--ink-4)">\u2014</div><div class="d">365 Days</div>`}
         </div>
-        <div class="stat-box">
-          <div class="val">${fmtUsd(s.currentLiquidity)}</div>
-          <div class="desc">Current Liquidity</div>
-        </div>
+        <div class="sb"><div class="v">${fmtUsd(s.currentLiquidity)}</div><div class="d">Current Liquidity</div></div>
       </div>
     </div>
     ` : ""}
 
-    <div style="text-align:center;padding:24px;font-size:11px;color:var(--ink-tertiary);border-top:1px solid var(--rule)">
-      Solana Token Ecosystem Analysis &bull; Powered by Codex.io &bull; Data from March 20, 2024
+    <div class="footer">
+      <a href="/">Back to Dashboard</a> &bull;
+      Solana Token Ecosystem Analysis &bull;
+      <a href="https://codex.io">Codex.io</a>
     </div>
   </div>
 
   ${chartData.length > 0 ? `
   <script>
   (function() {
-    const data = ${chartJson};
+    var data = ${chartJson};
     if (!data.length) return;
-
-    const canvas = document.getElementById('mcap-chart');
-    const ctx = canvas.getContext('2d');
-    const dpr = window.devicePixelRatio || 1;
+    var canvas = document.getElementById('mcap-chart');
+    var ctx = canvas.getContext('2d');
+    var dpr = window.devicePixelRatio || 1;
 
     function draw() {
-      const rect = canvas.parentElement.getBoundingClientRect();
+      var rect = canvas.parentElement.getBoundingClientRect();
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       canvas.style.width = rect.width + 'px';
       canvas.style.height = rect.height + 'px';
       ctx.scale(dpr, dpr);
 
-      const W = rect.width;
-      const H = rect.height;
-      const pad = { top: 20, right: 60, bottom: 40, left: 10 };
-      const cw = W - pad.left - pad.right;
-      const ch = H - pad.top - pad.bottom;
+      var W = rect.width, H = rect.height;
+      var pad = { top: 24, right: 64, bottom: 44, left: 12 };
+      var cw = W - pad.left - pad.right;
+      var ch = H - pad.top - pad.bottom;
 
-      const values = data.map(d => d.v);
-      const minV = 0;
-      const maxV = Math.max(...values) * 1.1;
-      const minT = data[0].t;
-      const maxT = data[data.length - 1].t;
+      var values = data.map(function(d) { return d.v; });
+      var maxV = Math.max.apply(null, values) * 1.1;
+      var minT = data[0].t, maxT = data[data.length - 1].t;
 
       function x(t) { return pad.left + ((t - minT) / (maxT - minT)) * cw; }
-      function y(v) { return pad.top + ch - ((v - minV) / (maxV - minV)) * ch; }
+      function y(v) { return pad.top + ch - (v / maxV) * ch; }
+      function fmtS(v) {
+        if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
+        if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+        if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+        return '$' + v.toFixed(0);
+      }
 
       ctx.clearRect(0, 0, W, H);
 
-      // $10M threshold line
-      const threshY = y(10_000_000);
+      // Grid lines
+      ctx.strokeStyle = '#eee';
+      ctx.lineWidth = 0.5;
+      for (var i = 1; i <= 5; i++) {
+        var val = (maxV / 5) * i;
+        var yy = y(val);
+        ctx.beginPath(); ctx.moveTo(pad.left, yy); ctx.lineTo(W - pad.right, yy); ctx.stroke();
+        ctx.fillStyle = '#999';
+        ctx.font = '11px Inter, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(fmtS(val), W - pad.right + 54, yy + 4);
+      }
+
+      // $10M threshold
+      var threshY = y(10000000);
       if (threshY > pad.top && threshY < H - pad.bottom) {
         ctx.strokeStyle = '#c41200';
         ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(pad.left, threshY);
-        ctx.lineTo(W - pad.right, threshY);
-        ctx.stroke();
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath(); ctx.moveTo(pad.left, threshY); ctx.lineTo(W - pad.right, threshY); ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = '#c41200';
-        ctx.font = '11px sans-serif';
+        ctx.font = '600 11px Inter, sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText('$10M', W - pad.right + 4, threshY + 4);
       }
 
-      // Y-axis labels
-      ctx.fillStyle = '#777';
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'right';
-      const ySteps = 5;
-      for (let i = 0; i <= ySteps; i++) {
-        const val = minV + (maxV - minV) * (i / ySteps);
-        const yy = y(val);
-        ctx.fillText(fmtShort(val), W - pad.right + 50, yy + 4);
-        if (i > 0) {
-          ctx.strokeStyle = '#eee';
-          ctx.lineWidth = 0.5;
-          ctx.beginPath();
-          ctx.moveTo(pad.left, yy);
-          ctx.lineTo(W - pad.right, yy);
-          ctx.stroke();
-        }
-      }
-
-      // X-axis labels
+      // X-axis
       ctx.textAlign = 'center';
-      ctx.fillStyle = '#777';
-      const xSteps = Math.min(6, data.length);
-      for (let i = 0; i <= xSteps; i++) {
-        const t = minT + (maxT - minT) * (i / xSteps);
-        const d = new Date(t);
+      ctx.fillStyle = '#999';
+      ctx.font = '11px Inter, sans-serif';
+      var xSteps = Math.min(6, data.length);
+      for (var i = 0; i <= xSteps; i++) {
+        var t = minT + (maxT - minT) * (i / xSteps);
+        var d = new Date(t);
         ctx.fillText(d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), x(t), H - pad.bottom + 20);
       }
 
-      // Area fill
+      // Area
       ctx.beginPath();
       ctx.moveTo(x(data[0].t), y(data[0].v));
-      for (let i = 1; i < data.length; i++) {
-        ctx.lineTo(x(data[i].t), y(data[i].v));
-      }
+      for (var i = 1; i < data.length; i++) ctx.lineTo(x(data[i].t), y(data[i].v));
       ctx.lineTo(x(data[data.length - 1].t), y(0));
       ctx.lineTo(x(data[0].t), y(0));
       ctx.closePath();
-      ctx.fillStyle = 'rgba(20, 113, 58, 0.08)';
+      ctx.fillStyle = 'rgba(17,17,17,0.04)';
       ctx.fill();
 
       // Line
       ctx.beginPath();
       ctx.moveTo(x(data[0].t), y(data[0].v));
-      for (let i = 1; i < data.length; i++) {
-        ctx.lineTo(x(data[i].t), y(data[i].v));
-      }
-      ctx.strokeStyle = '#14713a';
+      for (var i = 1; i < data.length; i++) ctx.lineTo(x(data[i].t), y(data[i].v));
+      ctx.strokeStyle = '#111';
       ctx.lineWidth = 1.5;
       ctx.stroke();
-    }
 
-    function fmtShort(v) {
-      if (v >= 1e9) return '$' + (v / 1e9).toFixed(1) + 'B';
-      if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
-      if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
-      return '$' + v.toFixed(0);
+      // Peak dot
+      var peakIdx = 0;
+      for (var i = 1; i < data.length; i++) { if (data[i].v > data[peakIdx].v) peakIdx = i; }
+      ctx.beginPath();
+      ctx.arc(x(data[peakIdx].t), y(data[peakIdx].v), 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#111';
+      ctx.fill();
+      ctx.fillStyle = '#111';
+      ctx.font = '600 10px Inter, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(fmtS(data[peakIdx].v), x(data[peakIdx].t), y(data[peakIdx].v) - 10);
     }
 
     draw();
