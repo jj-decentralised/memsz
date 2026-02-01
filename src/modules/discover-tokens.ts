@@ -250,7 +250,24 @@ async function processWindow(
     console.log(`${indent}[${win.label}] ${result.fetched} fetched, ${result.newCount} new`);
   }
 
-  // Safety: if pagination still hit the cap and we're at daily granularity, just accept it
+  // If pagination hit the 10K cap and we can still split, split and re-sweep
+  // to catch tokens beyond the cap (dedup via `seen` avoids double-counting)
+  if (result.hitCap && spanDays > 1) {
+    const subWindows = spanDays > 7 ? splitIntoWeeks(win) : splitIntoDays(win);
+    const level = spanDays > 7 ? "weekly" : "daily";
+    console.log(`${indent}[${win.label}] ⚠ Hit 10K cap (${result.fetched} items), splitting into ${subWindows.length} ${level} windows...`);
+
+    const sub = await sweepWindows(
+      client, baseFilters, rankings, label, subWindows,
+      seen, allTokens, onProgress, indent + "  ",
+    );
+    return {
+      fetched: result.fetched + sub.fetched,
+      newCount: result.newCount + sub.newCount,
+    };
+  }
+
+  // At daily granularity, just accept the cap
   if (result.hitCap && spanDays <= 1) {
     console.log(`${indent}[${win.label}] ⚠ Daily window hit 10K cap, accepting (${result.fetched} items)`);
   }
