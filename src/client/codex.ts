@@ -115,8 +115,8 @@ export const QUERIES = {
   `,
 
   GET_TOKEN_BARS: `
-    query GetTokenBars($symbol: String!, $from: Int!, $to: Int!, $resolution: String!, $removeLeadingNullValues: Boolean) {
-      getTokenBars(symbol: $symbol, from: $from, to: $to, resolution: $resolution, removeLeadingNullValues: $removeLeadingNullValues) {
+    query GetTokenBars($symbol: String!, $from: Int!, $to: Int!, $resolution: String!, $removeLeadingNullValues: Boolean, $currencyCode: QuoteCurrency) {
+      getTokenBars(symbol: $symbol, from: $from, to: $to, resolution: $resolution, removeLeadingNullValues: $removeLeadingNullValues, currencyCode: $currencyCode) {
         o
         h
         l

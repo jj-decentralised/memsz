@@ -77,6 +77,7 @@ async function fetchTokenBars(
       to: toTs,
       resolution,
       removeLeadingNullValues: true,
+      currencyCode: "USD",
     });
 
     const bars = data.getTokenBars;
