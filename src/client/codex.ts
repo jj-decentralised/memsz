@@ -74,7 +74,7 @@ function sleep(ms: number): Promise<void> {
 
 export const QUERIES = {
   FILTER_TOKENS: `
-    query FilterTokens($filters: TokenFilters, $rankings: TokenRanking, $limit: Int, $offset: Int) {
+    query FilterTokens($filters: TokenFilters, $rankings: [TokenRanking], $limit: Int, $offset: Int) {
       filterTokens(filters: $filters, rankings: $rankings, limit: $limit, offset: $offset) {
         results {
           token {

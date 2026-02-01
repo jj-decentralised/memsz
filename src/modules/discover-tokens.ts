@@ -102,7 +102,7 @@ export async function discoverAllCandidates(
       QUERIES.FILTER_TOKENS,
       {
         filters: sweep.filters,
-        rankings: sweep.rankings,
+        rankings: [sweep.rankings],
         limit: 1,
         offset: 0,
       }
@@ -118,7 +118,7 @@ export async function discoverAllCandidates(
           QUERIES.FILTER_TOKENS,
           {
             filters: sweep.filters,
-            rankings: sweep.rankings,
+            rankings: [sweep.rankings],
             limit: PAGE_SIZE,
             offset,
           }
