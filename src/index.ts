@@ -262,7 +262,7 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 10; // v10=parallel discovery, probe-first, raised thresholds
+  const DISCOVERY_VERSION = 11; // v11=marketCap threshold raised to $1M
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   // Auto-clear all cached data when version changes (no manual cache clear needed)

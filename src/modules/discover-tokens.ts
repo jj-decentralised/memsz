@@ -316,8 +316,8 @@ export async function discoverAllCandidates(
       rankings: { attribute: "liquidity", direction: "DESC" },
     },
     {
-      label: "marketCap >= $50K",
-      filters: { network: [config.solanaNetworkId], marketCap: { gte: 50_000 } },
+      label: "marketCap >= $1M",
+      filters: { network: [config.solanaNetworkId], marketCap: { gte: 1_000_000 } },
       rankings: { attribute: "marketCap", direction: "DESC" },
     },
     {
@@ -345,11 +345,11 @@ export async function discoverAllCandidates(
 
   // ── Tier 2: Monthly windowed sweeps (catches faded/dead tokens) ──
   // Raised thresholds: any token that hit $10M mcap will still have
-  // 1000+ holders, $100K+ liquidity, or $50K+ mcap even after crashing.
+  // 1000+ holders, $100K+ liquidity, or $1M+ mcap even after crashing.
   const monthlySweepConfigs = [
     { label: "holders >= 1000", filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 } }, rankings: { attribute: "holders", direction: "DESC" } },
     { label: "liquidity >= $100K", filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
-    { label: "marketCap >= $50K", filters: { network: [config.solanaNetworkId], marketCap: { gte: 50_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
+    { label: "marketCap >= $1M", filters: { network: [config.solanaNetworkId], marketCap: { gte: 1_000_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
   ];
 
   // Run all monthly sweep configs in parallel, each scanning all months concurrently
