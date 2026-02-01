@@ -31,11 +31,11 @@ import {
 
 interface BarsResponse {
   getTokenBars: {
-    o: number[];
-    h: number[];
-    l: number[];
-    c: number[];
-    v: number[];
+    o: (number | null)[];
+    h: (number | null)[];
+    l: (number | null)[];
+    c: (number | null)[];
+    volume: (string | null)[] | null;
     t: number[];
     s: string;
   };
@@ -86,14 +86,17 @@ async function fetchTokenBars(
 
     return bars.t.map((t, i) => ({
       timestamp: t,
-      open: bars.o[i],
-      high: bars.h[i],
-      low: bars.l[i],
-      close: bars.c[i],
-      volume: bars.v[i],
+      open: bars.o[i] ?? 0,
+      high: bars.h[i] ?? 0,
+      low: bars.l[i] ?? 0,
+      close: bars.c[i] ?? 0,
+      volume: bars.volume?.[i] ? parseFloat(bars.volume[i]!) : 0,
     }));
   } catch (err) {
-    // Fall back to legacy getBars with pair address if getTokenBars fails
+    const msg = err && typeof err === "object" && "message" in err
+      ? String((err as { message: string }).message).slice(0, 200)
+      : "Unknown error";
+    console.error(`  [bars] Error fetching bars for ${symbol}: ${msg}`);
     return [];
   }
 }
