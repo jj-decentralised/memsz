@@ -23,6 +23,7 @@ import { generateReport, generateDashboardReport } from "./report.js";
 import type { CodexConfig, TokenInfo, DashboardReport, AggregateReport } from "./types/index.js";
 import { median, formatUsd } from "./utils/helpers.js";
 import { saveJson, loadJson, runFile, getFilePath, clearAllCache } from "./utils/store.js";
+import { generateTokensCsv, generateWalletsCsv } from "./utils/csv-export.js";
 import { renderDashboard } from "./views/dashboard.js";
 import { renderTokenProfile } from "./views/token-profile.js";
 
@@ -286,6 +287,16 @@ async function runAnalysis() {
   }
   console.log(`  [store] Saved ${report.tokenDetails.length} individual token profiles`);
 
+  // Generate CSV exports for external analysis tools
+  const tokensCsv = generateTokensCsv(report);
+  writeFileSync(getFilePath("tokens.csv"), tokensCsv);
+  console.log(`  [store] Saved tokens.csv (${report.tokenDetails.length} rows, ${(tokensCsv.length / 1024).toFixed(0)} KB)`);
+
+  const walletsCsv = generateWalletsCsv(report);
+  writeFileSync(getFilePath("wallets.csv"), walletsCsv);
+  const walletRows = walletsCsv.split("\n").length - 1;
+  console.log(`  [store] Saved wallets.csv (${walletRows} rows, ${(walletsCsv.length / 1024).toFixed(0)} KB)`);
+
   status.state = "completed";
   status.phase = "done";
   status.lastRun = new Date().toISOString();
@@ -403,6 +414,48 @@ function startHealthServer() {
         return;
       }
 
+      if (req.url === "/export/tokens.csv") {
+        const csvPath = getFilePath("tokens.csv");
+        if (existsSync(csvPath)) {
+          stat(csvPath).then((s) => {
+            res.writeHead(200, {
+              "Content-Type": "text/csv; charset=utf-8",
+              "Content-Disposition": "attachment; filename=solana-tokens.csv",
+              "Content-Length": s.size,
+            });
+            createReadStream(csvPath).pipe(res);
+          }).catch(() => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to read CSV file" }));
+          });
+        } else {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No CSV export available yet. Run the analysis first." }));
+        }
+        return;
+      }
+
+      if (req.url === "/export/wallets.csv") {
+        const csvPath = getFilePath("wallets.csv");
+        if (existsSync(csvPath)) {
+          stat(csvPath).then((s) => {
+            res.writeHead(200, {
+              "Content-Type": "text/csv; charset=utf-8",
+              "Content-Disposition": "attachment; filename=solana-wallets.csv",
+              "Content-Length": s.size,
+            });
+            createReadStream(csvPath).pipe(res);
+          }).catch(() => {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "Failed to read CSV file" }));
+          });
+        } else {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "No CSV export available yet. Run the analysis first." }));
+        }
+        return;
+      }
+
       if (req.url === "/run" && req.method === "POST") {
         if (status.state === "running") {
           res.writeHead(409, { "Content-Type": "application/json" });
@@ -440,9 +493,11 @@ function startHealthServer() {
 
   server.listen(port, () => {
     console.log(`Health server listening on port ${port}`);
-    console.log(`  GET  /health  — service status`);
-    console.log(`  GET  /report  — latest analysis report`);
-    console.log(`  POST /run     — trigger a new analysis run`);
+    console.log(`  GET  /health             — service status`);
+    console.log(`  GET  /report             — latest analysis report (JSON)`);
+    console.log(`  GET  /export/tokens.csv  — token-level CSV export`);
+    console.log(`  GET  /export/wallets.csv — wallet-level CSV export`);
+    console.log(`  POST /run                — trigger a new analysis run`);
   });
 }
 

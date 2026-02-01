@@ -742,7 +742,9 @@ export function renderDashboard(
       <br>
       <a href="/health">/health</a> &bull;
       <a href="/report/summary">/report/summary</a> &bull;
-      <a href="/report">/report (full JSON)</a>
+      <a href="/report">/report (full JSON)</a> &bull;
+      <a href="/export/tokens.csv">tokens.csv</a> &bull;
+      <a href="/export/wallets.csv">wallets.csv</a>
     </div>
   </div>
 
