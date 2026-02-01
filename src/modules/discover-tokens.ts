@@ -18,7 +18,7 @@
 import type { GraphQLClient } from "graphql-request";
 import type { CodexConfig, TokenInfo } from "../types/index.js";
 import { QUERIES, rateLimitedQuery } from "../client/codex.js";
-import { paginateAll } from "../utils/helpers.js";
+import { paginateAll, toUnixSeconds, SOLANA_DATA_START } from "../utils/helpers.js";
 
 interface FilterTokenResult {
   token: {
@@ -53,7 +53,13 @@ interface SweepConfig {
 
 /**
  * Discover ALL Solana tokens that could have historically reached $10M.
- * Runs three overlapping sweeps to maximize coverage, then deduplicates.
+ *
+ * The Codex filterTokens API only filters on *current* state, so tokens
+ * that pumped to $10M+ and then completely died (zero liquidity, zero mcap)
+ * can slip through. To maximise coverage we run many overlapping sweeps
+ * with progressively lower thresholds, including a broad sweep of all
+ * tokens created since Solana data start (March 2024) that still have
+ * any holders or any remaining on-chain footprint.
  */
 export async function discoverAllCandidates(
   client: GraphQLClient,
@@ -61,8 +67,10 @@ export async function discoverAllCandidates(
   onProgress?: (fetched: number, total: number) => void,
 ): Promise<TokenInfo[]> {
   const PAGE_SIZE = 200;
+  const solanaStart = toUnixSeconds(SOLANA_DATA_START);
 
   const sweeps: SweepConfig[] = [
+    // ── Tier 1: High-signal current-state sweeps ──
     {
       label: "liquidity >= $10K",
       filters: {
@@ -72,6 +80,14 @@ export async function discoverAllCandidates(
       rankings: { attribute: "liquidity", direction: "DESC" },
     },
     {
+      label: "marketCap >= $50K",
+      filters: {
+        network: [config.solanaNetworkId],
+        marketCap: { gte: 50_000 },
+      },
+      rankings: { attribute: "marketCap", direction: "DESC" },
+    },
+    {
       label: "holders >= 500",
       filters: {
         network: [config.solanaNetworkId],
@@ -79,11 +95,32 @@ export async function discoverAllCandidates(
       },
       rankings: { attribute: "holders", direction: "DESC" },
     },
+
+    // ── Tier 2: Catch tokens that have faded but still have some footprint ──
     {
-      label: "marketCap >= $50K",
+      label: "holders >= 100 (created since Mar 2024)",
       filters: {
         network: [config.solanaNetworkId],
-        marketCap: { gte: 50_000 },
+        holders: { gte: 100 },
+        createdAt: { gte: solanaStart },
+      },
+      rankings: { attribute: "holders", direction: "DESC" },
+    },
+    {
+      label: "liquidity >= $100 (created since Mar 2024)",
+      filters: {
+        network: [config.solanaNetworkId],
+        liquidity: { gte: 100 },
+        createdAt: { gte: solanaStart },
+      },
+      rankings: { attribute: "liquidity", direction: "DESC" },
+    },
+    {
+      label: "marketCap >= $1K (created since Mar 2024)",
+      filters: {
+        network: [config.solanaNetworkId],
+        marketCap: { gte: 1_000 },
+        createdAt: { gte: solanaStart },
       },
       rankings: { attribute: "marketCap", direction: "DESC" },
     },
