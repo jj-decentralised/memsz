@@ -262,7 +262,7 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 12; // v12=fix 10K cap fallback: split windows when pagination overflows
+  const DISCOVERY_VERSION = 13; // v13=all sweeps require mcap >= $1M to avoid screening 200K+ irrelevant tokens
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
 
   // Auto-clear all cached data when version changes (no manual cache clear needed)

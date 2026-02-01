@@ -328,8 +328,8 @@ export async function discoverAllCandidates(
   // ── Tier 1: Global sweeps (no date filter, catches established tokens) ──
   const globalSweeps: Array<{ label: string; filters: Record<string, unknown>; rankings: SweepConfig["rankings"] }> = [
     {
-      label: "liquidity >= $100K",
-      filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 } },
+      label: "liquidity >= $100K + mcap >= $1M",
+      filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 }, marketCap: { gte: 1_000_000 } },
       rankings: { attribute: "liquidity", direction: "DESC" },
     },
     {
@@ -338,8 +338,8 @@ export async function discoverAllCandidates(
       rankings: { attribute: "marketCap", direction: "DESC" },
     },
     {
-      label: "holders >= 1000",
-      filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 } },
+      label: "holders >= 1000 + mcap >= $1M",
+      filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 }, marketCap: { gte: 1_000_000 } },
       rankings: { attribute: "holders", direction: "DESC" },
     },
   ];
@@ -364,8 +364,8 @@ export async function discoverAllCandidates(
   // Raised thresholds: any token that hit $10M mcap will still have
   // 1000+ holders, $100K+ liquidity, or $1M+ mcap even after crashing.
   const monthlySweepConfigs = [
-    { label: "holders >= 1000", filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 } }, rankings: { attribute: "holders", direction: "DESC" } },
-    { label: "liquidity >= $100K", filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
+    { label: "holders >= 1000 + mcap >= $1M", filters: { network: [config.solanaNetworkId], holders: { gte: 1_000 }, marketCap: { gte: 1_000_000 } }, rankings: { attribute: "holders", direction: "DESC" } },
+    { label: "liquidity >= $100K + mcap >= $1M", filters: { network: [config.solanaNetworkId], liquidity: { gte: 100_000 }, marketCap: { gte: 1_000_000 } }, rankings: { attribute: "liquidity", direction: "DESC" } },
     { label: "marketCap >= $1M", filters: { network: [config.solanaNetworkId], marketCap: { gte: 1_000_000 } }, rankings: { attribute: "marketCap", direction: "DESC" } },
   ];
 
