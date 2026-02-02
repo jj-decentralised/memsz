@@ -78,6 +78,30 @@ export function clearAllCache(): string[] {
 }
 
 /**
+ * Clear only analysis phase results (weekly, hourly, holders, survival)
+ * without touching discovery cache. Useful when analysis logic changes
+ * but the discovered token list is still valid.
+ */
+export function clearAnalysisPhases(): void {
+  ensureDir(DATA_DIR);
+  const phases = ["weekly", "hourly", "holders", "survival"];
+  let cleared = 0;
+  const dirs = readdirSync(DATA_DIR).filter((f) => {
+    const full = join(DATA_DIR, f);
+    return statSync(full).isDirectory() && phases.some((p) => f.includes(`-${p}`));
+  });
+  for (const d of dirs) {
+    const dirPath = join(DATA_DIR, d);
+    const dirFiles = readdirSync(dirPath);
+    for (const f of dirFiles) {
+      unlinkSync(join(dirPath, f));
+      cleared++;
+    }
+  }
+  console.log(`  [store] Cleared ${cleared} analysis results from ${dirs.length} phase dirs (discovery preserved)`);
+}
+
+/**
  * Run ID based on date — allows one fresh run per day,
  * reusing intermediate results within the same day.
  */
@@ -189,8 +213,8 @@ const VERSION_STAMP_FILE = ".analysis-version";
 /**
  * Load the last-run version stamp from disk.
  */
-export function loadVersionStamp(): number | null {
-  const p = filePath(VERSION_STAMP_FILE);
+export function loadVersionStamp(key: string = VERSION_STAMP_FILE): number | null {
+  const p = filePath(key);
   if (!existsSync(p)) return null;
   try {
     return parseInt(readFileSync(p, "utf-8").trim(), 10);
@@ -202,8 +226,8 @@ export function loadVersionStamp(): number | null {
 /**
  * Save the current version stamp to disk.
  */
-export function saveVersionStamp(version: number): void {
-  const p = filePath(VERSION_STAMP_FILE);
+export function saveVersionStamp(version: number, key: string = VERSION_STAMP_FILE): void {
+  const p = filePath(key);
   writeFileSync(p, String(version));
 }
 

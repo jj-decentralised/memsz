@@ -39,6 +39,7 @@ import {
   runFile,
   getFilePath,
   clearAllCache,
+  clearAnalysisPhases,
   saveTokenResult,
   loadTokenResult,
   getCompletedTokens,
@@ -262,15 +263,25 @@ async function runAnalysis() {
 
   // Discovery cache is versioned — bump DISCOVERY_VERSION when sweep config changes
   // to force a fresh discovery run even if today's cache exists.
-  const DISCOVERY_VERSION = 14; // v14=fix bars API: use pair address not token address
+  const DISCOVERY_VERSION = 13; // bump to force re-discovery (clears everything)
+  const ANALYSIS_VERSION = 2;   // bump to re-run weekly/hourly/holders/survival (keeps discovery)
   const discoveryCacheKey = `${runFile("tokens")}.v${DISCOVERY_VERSION}`;
+  const analysisStampKey = "analysis-version";
 
-  // Auto-clear all cached data when version changes (no manual cache clear needed)
+  // Auto-clear all cached data when discovery version changes
   const lastVersion = loadVersionStamp();
   if (lastVersion !== DISCOVERY_VERSION) {
-    console.log(`  [auto-clear] Version changed (${lastVersion ?? "none"} → ${DISCOVERY_VERSION}), clearing all cached data...`);
+    console.log(`  [auto-clear] Discovery version changed (${lastVersion ?? "none"} → ${DISCOVERY_VERSION}), clearing all cached data...`);
     clearAllCache();
     saveVersionStamp(DISCOVERY_VERSION);
+  }
+
+  // Clear only analysis phases when analysis version changes (discovery preserved)
+  const lastAnalysisVersion = loadVersionStamp(analysisStampKey);
+  if (lastAnalysisVersion !== ANALYSIS_VERSION) {
+    console.log(`  [auto-clear] Analysis version changed (${lastAnalysisVersion ?? "none"} → ${ANALYSIS_VERSION}), clearing phase results...`);
+    clearAnalysisPhases();
+    saveVersionStamp(ANALYSIS_VERSION, analysisStampKey);
   }
 
   let allTokens: TokenInfo[];
