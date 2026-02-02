@@ -60,13 +60,13 @@ interface LegacyBarsResponse {
  */
 async function fetchTokenBars(
   client: GraphQLClient,
-  tokenAddress: string,
+  pairAddress: string,
   networkId: number,
   resolution: string,
   from?: number,
   to?: number,
 ): Promise<OHLCVBar[]> {
-  const symbol = `${tokenAddress}:${networkId}`;
+  const symbol = `${pairAddress}:${networkId}`;
   const fromTs = from ?? toUnixSeconds(SOLANA_DATA_START);
   const toTs = to ?? toUnixSeconds(new Date());
 
@@ -109,7 +109,7 @@ async function fetchTokenBars(
  */
 async function fetchFullHourlyBars(
   client: GraphQLClient,
-  tokenAddress: string,
+  pairAddress: string,
   networkId: number,
   analysisWindowDays?: number,
 ): Promise<OHLCVBar[]> {
@@ -128,7 +128,7 @@ async function fetchFullHourlyBars(
     batchNum++;
     const batchEnd = Math.min(cursor + BATCH_SECONDS, endTs);
     const bars = await fetchTokenBars(
-      client, tokenAddress, networkId, "60", cursor, batchEnd
+      client, pairAddress, networkId, "60", cursor, batchEnd
     );
 
     if (bars.length > 0) {
@@ -138,7 +138,7 @@ async function fetchFullHourlyBars(
     cursor = batchEnd;
 
     if (batchNum % 4 === 0) {
-      console.log(`    [hourly] ${tokenAddress.slice(0, 8)}... batch ${batchNum}: ${allBars.length} bars so far`);
+      console.log(`    [hourly] ${pairAddress.slice(0, 8)}... batch ${batchNum}: ${allBars.length} bars so far`);
     }
   }
 
@@ -177,11 +177,18 @@ export async function weeklyPreScreen(
     };
   }
 
+  if (!token.primaryPairAddress) {
+    return {
+      passed: token.marketCapUsd >= config.marketCapThreshold,
+      estimatedPeakMcap: token.marketCapUsd,
+    };
+  }
+
   const windowStart = config.analysisWindowDays
     ? toUnixSeconds(new Date()) - (config.analysisWindowDays * 86400)
     : undefined;
   const weeklyBars = await fetchTokenBars(
-    client, token.address, token.networkId, "7D", windowStart
+    client, token.primaryPairAddress, token.networkId, "7D", windowStart
   );
 
   if (weeklyBars.length === 0) {
@@ -244,9 +251,16 @@ export async function analyzeTrajectoryHourly(
     return result;
   }
 
+  if (!token.primaryPairAddress) {
+    result.reachedThreshold = token.marketCapUsd >= config.marketCapThreshold;
+    result.currentlyAbove = result.reachedThreshold;
+    result.peakMarketCap = token.marketCapUsd;
+    return result;
+  }
+
   // Fetch hourly history (respects analysisWindowDays)
   const hourlyBars = await fetchFullHourlyBars(
-    client, token.address, token.networkId, config.analysisWindowDays
+    client, token.primaryPairAddress, token.networkId, config.analysisWindowDays
   );
 
   if (hourlyBars.length === 0) {
